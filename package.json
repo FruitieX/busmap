@@ -1,6 +1,6 @@
 {
   "name": "busmap",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "devDependencies": {
     "jest-expo": "25.0.0",
