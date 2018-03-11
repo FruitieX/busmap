@@ -126,7 +126,7 @@ export default class Lines extends React.Component {
       /> */}
       <ScrollView
         keyboardShouldPersistTaps="always"
-        style={{ height: 40, flexGrow: 0, zIndex: 0 }}
+        style={{ height: 40, flexGrow: 0, backgroundColor: 'white' }}
         horizontal
       >
         {this.renderSelectedLines()}
