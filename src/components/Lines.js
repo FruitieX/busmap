@@ -122,7 +122,7 @@ export default class Lines extends React.Component {
     this.keyboardDidHideListener.remove();
   };
 
-  activeStyle = { flex: 3 };
+  activeStyle = Platform.OS === 'ios' ? { height: 340 } : { flex: 3 };
   inactiveStyle = { height: 80 };
 
   render = () => (
@@ -131,7 +131,15 @@ export default class Lines extends React.Component {
           autoCapitalize="none"
           autoCorrect={false}
           containerStyle={styles.autocompleteContainer}
-          listStyle={{ borderWidth: 0, marginHorizontal: 0, marginBottom: 40, backgroundColor: 'white', zIndex: 1 }}
+          listStyle={{
+            borderWidth: 0,
+            marginHorizontal: 0,
+            marginBottom: 40,
+            backgroundColor: 'white',
+            zIndex: 1,
+            //position: 'relative',
+            height: Platform.OS === 'ios' ? 300 : undefined
+          }}
           data={this.findLines()}
           defaultValue={this.state.text}
           onChangeText={this.onChangeText}
@@ -158,9 +166,6 @@ export default class Lines extends React.Component {
 const styles = StyleSheet.create({
   autocompleteContainer: {
     flex: 1,
-    left: 0,
-    right: 0,
-    top: 0,
     zIndex: 1
   }
 });
