@@ -111,7 +111,6 @@ export default class Lines extends React.Component {
           autoCorrect={false}
           containerStyle={styles.autocompleteContainer}
           listStyle={{ borderWidth: 0, marginHorizontal: 0, marginBottom: 40 }}
-          keyboardType="numeric"
           data={this.findLines()}
           defaultValue={this.state.text}
           onChangeText={this.onChangeText}
