@@ -60,7 +60,7 @@ export default class Map extends React.Component {
 
 
   render = () => (
-    <Container>
+    <View style={{ flex: 1 }}>
       <MapView
         provider="google"
         showsUserLocation={true}
@@ -74,6 +74,6 @@ export default class Map extends React.Component {
       >
         {this.renderMarkers()}
       </MapView>
-    </Container>
+    </View>
   );
 }
