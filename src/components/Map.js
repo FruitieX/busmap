@@ -6,12 +6,12 @@ import {
   View,
   Image,
   ActivityIndicator,
-  Keyboard,
   Text,
   Platform,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
+  Keyboard,
 } from 'react-native';
 import { connect } from 'react-redux';
 
@@ -27,46 +27,6 @@ export default class Map extends React.Component {
     availableRoutes: [],
     connected: false,
   };
-
-  /*
-  wsError = async err => {
-    this.setState({ connected: false });
-    console.log('wsError()', err);
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    this.wsConnect();
-  };
-
-  wsConnect = () => {
-    this.ws = new WebSocket('ws://fruitiex.org:7592');
-
-    this.ws.onopen = () => {
-      this.setState({ connected: true });
-      console.log('connected');
-
-      this.props.lines.forEach(line => {
-        this.ws.send(JSON.stringify({
-          method: 'subscribe',
-          id: line
-        }));
-      });
-    }
-    this.ws.onerror = () => this.wsError();
-    this.ws.onclose = () => this.wsError();
-    this.ws.onmessage = e => {
-      const json = JSON.parse(e.data);
-      const vehIndex = this.data.findIndex(v => v.veh === json.veh);
-
-      if (vehIndex === -1) {
-        this.data = [...this.data, json];
-      } else {
-        const newData = [...this.data];
-        newData[vehIndex] = json;
-
-        this.data = newData;
-      }
-    };
-  };
-  */
 
   componentDidMount = async () => {
     // weird hack for getting iOS initialRegion right
@@ -107,6 +67,9 @@ export default class Map extends React.Component {
         showsMyLocationButton={true}
         style={{ flex: 1 }}
         initialRegion={this.props.region}
+        onPress={Keyboard.dismiss}
+        onPanDrag={Keyboard.dismiss}
+        onMarkerPress={Keyboard.dismiss}
         ref={ref => this.mapView = ref }
       >
         {this.renderMarkers()}
