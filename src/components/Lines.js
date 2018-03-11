@@ -47,6 +47,8 @@ export default class Lines extends React.Component {
   onChangeText = text => this.setState({ text: text.trim() });
 
   submitHandler = (lineId) => () => {
+    if (!lineId || !lineId.length) return;
+
     this.setState({ text: '' });
 
     const routeIndex = this.props.availableRoutes
@@ -88,10 +90,19 @@ export default class Lines extends React.Component {
 
     const text = this.state.text.toLowerCase()
 
-    return this.props.availableRoutes
+    const lines = this.props.availableRoutes
       .filter(line => !line.shortName.toLowerCase().indexOf(text))
       .sort((a, b) => a.shortName.length - b.shortName.length);
+
+    if (!lines.length) {
+      return [{
+        longName: 'No search results'
+      }];
+    }
+    return lines;
   }
+
+  clearFilter = () => this.setState({ text: '' });
 
   // react native sucks
   // especially on android
@@ -99,6 +110,16 @@ export default class Lines extends React.Component {
     if (this.state.active !== active) {
       setTimeout(() => this.setState({ active }));
     }
+  };
+
+  componentDidMount = () => {
+    this.keyboardDidHideListener = Keyboard.addListener('keyboardDidHide', () => {
+      this.clearFilter();
+    });
+  };
+
+  componentWillUnmount = () => {
+    this.keyboardDidHideListener.remove();
   };
 
   activeStyle = { flex: 3 };
@@ -110,7 +131,7 @@ export default class Lines extends React.Component {
           autoCapitalize="none"
           autoCorrect={false}
           containerStyle={styles.autocompleteContainer}
-          listStyle={{ borderWidth: 0, marginHorizontal: 0, marginBottom: 40 }}
+          listStyle={{ borderWidth: 0, marginHorizontal: 0, marginBottom: 40, backgroundColor: 'white', zIndex: 1 }}
           data={this.findLines()}
           defaultValue={this.state.text}
           onChangeText={this.onChangeText}
