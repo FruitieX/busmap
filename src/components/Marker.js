@@ -1,5 +1,5 @@
 import React from 'react';
-import { View } from 'react-native';
+import { View, Platform } from 'react-native';
 import { MapView } from 'expo';
 import styled from 'styled-components/native';
 import { indexToHue } from '../utils/routes';
@@ -30,6 +30,44 @@ const MarkerButton = styled.TouchableOpacity`
 `;
 
 export class Marker extends React.Component {
+  constructor(props) {
+    super(props);
+
+    const { data } = this.props;
+
+    this.state = {
+      coordinate: new MapView.AnimatedRegion({
+        latitude: data.lat,
+        longitude: data.long,
+      }),
+    };
+  }
+
+  componentWillReceiveProps = nextProps => {
+    if (this.props.data !== nextProps.data) {
+      const { data } = this.props;
+      const nextCoordinate = {
+        latitude: data.lat,
+        longitude: data.long,
+      };
+
+      if (Platform.OS === 'android') {
+        if (this.marker) {
+          console.log('there');
+          this.marker._component.animateMarkerToCoordinate(
+            nextCoordinate,
+            1000
+          );
+        }
+      } else {
+        this.state.coordinate.timing({
+          ...nextCoordinate,
+          duration: 1000,
+        }).start();
+      }
+    }
+  };
+
   render = () => {
     const { data } = this.props;
 
@@ -39,12 +77,10 @@ export class Marker extends React.Component {
 
     return (
       <View>
-        <MapView.Marker
-          coordinate={{
-            latitude: data.lat,
-            longitude: data.long,
-          }}
+        <MapView.Marker.Animated
+          coordinate={this.state.coordinate}
           //rotation={data.hdg}
+          ref={marker => { this.marker = marker }}
           anchor={{ x: 0.5, y: 0.5 }}
           title={`Dest: ${data.dest}, ID: ${data.veh}`}
           description={`Last update: ${new Date(data.tst).toTimeString()}`}
@@ -57,7 +93,7 @@ export class Marker extends React.Component {
             source={ArrowImage}
             style={{ height: 50, width: 50, transform: [{ rotate: data.hdg ? `${data.hdg}deg` : '0deg' }] }}
           /> */}
-        </MapView.Marker>
+        </MapView.Marker.Animated>
         {/* <MapView.Polyline
           strokeWidth={2}
           lineCap="butt"
