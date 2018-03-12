@@ -1,8 +1,9 @@
 {
-  "privacy": "public",
   "expo": {
     "sdkVersion": "25.0.0",
+    "slug": "busmap",
     "icon": "assets/icon.png",
+    "privacy": "public",
     "splash": {
       "image": "assets/splash.png"
     },
