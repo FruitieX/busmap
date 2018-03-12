@@ -1,0 +1,12 @@
+Privacy-relevant Android permissions requested by this app
+
+LOCATION
+
+The busmap app uses the location permission in order to display the user's
+current location on the map, as well as zoom in on an area near the user when
+the app starts. Location information is neither collected, nor transmitted over
+the network in any way.
+
+The application's permission request can be denied, and then no user location
+is visible on the map, and the map defaults to displaying a preselected region
+of the Helsinki area.

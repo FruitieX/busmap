@@ -13,6 +13,11 @@
     },
     "android": {
       "package": "org.fruitiex.busmap",
+      "versionCode": 2,
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ],
       "config": {
         "googleMaps": {
           "apiKey": "AIzaSyB3qo1of90Z--FmZjD5_5Ndoad4txTrFmg"
