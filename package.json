@@ -1,7 +1,6 @@
 {
   "name": "busmap",
   "version": "0.2.2",
-  "private": false,
   "devDependencies": {
     "jest-expo": "25.0.0",
     "react-native-scripts": "1.8.1",
@@ -23,6 +22,7 @@
     "events": "^2.0.0",
     "expo": "^25.0.0",
     "global": "^4.3.2",
+    "hsl-to-hex": "^1.0.0",
     "mqtt": "^2.16.0",
     "process": "^0.11.10",
     "react": "16.2.0",

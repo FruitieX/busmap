@@ -15,8 +15,10 @@ import {
 } from 'react-native';
 import { connect } from 'react-redux';
 
+import { indexToHue } from '../utils/routes';
 import { Marker } from './Marker';
 import { Container } from './Layout';
+import hsl from 'hsl-to-hex';
 
 export default class Map extends React.Component {
   data = [];
@@ -58,6 +60,40 @@ export default class Map extends React.Component {
         />
       );
 
+  // TODO: this is bad, prolly gets redrawn every time
+  renderPolylines = () => {
+    //console.log('drawing polylines', Object.keys(this.props.polylines));
+
+    const polylines = [];
+
+    Object.entries(this.props.polylines)
+      .forEach(([shortName, polyline]) => {
+        const index = this.props.lines.indexOf(shortName);
+        const color = indexToHue(index, this.props.lines.length);
+        const hexColor = `${hsl(color, 70, 50)}aa`;
+
+        polylines.push(
+          <MapView.Polyline
+            coordinates={polyline}
+            key={index}
+            strokeColor={hexColor}
+            strokeWidth={4}
+          />
+        )
+      })
+
+    // This super absurd hack (partially?) resolves weird dangling polylines
+    // when deleting lines on iOS. Major WTF.
+    if (Platform.OS === 'ios') {
+      polylines.push(<MapView.Polyline
+        coordinates={[{latitude: 0, longitude: 0}, {latitude: 1, longitude: 1}]}
+        key={polylines.length}
+        strokeWidth={0}
+      />);
+    }
+
+    return polylines;
+  }
 
   render = () => (
     <View style={{ flex: 1 }}>
@@ -68,11 +104,11 @@ export default class Map extends React.Component {
         style={{ flex: 1 }}
         initialRegion={this.props.region}
         onPress={Keyboard.dismiss}
-        onPanDrag={Keyboard.dismiss}
         onMarkerPress={Keyboard.dismiss}
         ref={ref => this.mapView = ref }
       >
         {this.renderMarkers()}
+        {this.renderPolylines()}
       </MapView>
     </View>
   );

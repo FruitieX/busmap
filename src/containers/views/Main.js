@@ -2,9 +2,10 @@ import React from 'react';
 
 import { addLine, removeLine } from '../../state/lines';
 import { setAvailableRoutes } from '../../state/availableRoutes';
+import { setPolylines, removePolyline } from '../../state/polylines';
 import { Container } from '../../components/Layout';
 import { connect } from 'react-redux';
-import { getRoutes } from '../../utils/routes';
+import { getRoutes, getPolylines } from '../../utils/routes';
 import Map from '../../components/Map';
 import Lines from '../../components/Lines';
 
@@ -13,12 +14,15 @@ import mqtt from 'mqtt';
 
 const mapStateToProps = state => ({
   lines: state.lines,
+  polylines: state.polylines,
   availableRoutes: state.availableRoutes,
 });
 const mapDispatchToProps = dispatch => ({
   addLine: (lineId) => dispatch(addLine(lineId)),
   removeLine: (lineId) => dispatch(removeLine(lineId)),
   setAvailableRoutes: (routes) => dispatch(setAvailableRoutes(routes)),
+  setPolylines: (polylines) => dispatch(setPolylines(polylines)),
+  removePolyline: (polyline) => dispatch(removePolyline(polyline)),
 });
 
 export class Main extends React.Component {
@@ -31,6 +35,7 @@ export class Main extends React.Component {
 
   componentDidMount = async () => {
     getRoutes().then(this.props.setAvailableRoutes);
+    this.fetchPolylinesForLines(this.props.lines);
 
     // TODO: bring mqtt client back up if app is resumed
     //AppState.addEventListener("change",
@@ -115,15 +120,34 @@ export class Main extends React.Component {
 
   addAndSub = line => {
     this.subscribeToLine(line, false);
+    this.fetchPolylinesForLines([...this.props.lines, line]);
     this.props.addLine(line);
   }
 
   removeAndUnsub = line => {
     this.subscribeToLine(line, true);
     this.props.removeLine(line);
+    this.props.removePolyline(line);
 
     this.data = this.data.filter(l => l.desi !== line);
     this.doUpdate();
+  }
+
+  fetchPolylinesForLines = async (lines) => {
+    const gtfsIdLines = [];
+
+    lines.forEach(line => {
+      const availableRoute = this.props.availableRoutes
+        .find(availableRoute => availableRoute.shortName === line);
+
+      if (availableRoute) {
+        gtfsIdLines.push(availableRoute.gtfsId);
+      }
+    });
+
+    const polylines = await getPolylines(gtfsIdLines);
+
+    this.props.setPolylines(polylines);
   }
 
   render = () => {
@@ -139,6 +163,7 @@ export class Main extends React.Component {
           lines={this.props.lines}
           markers={this.state.markers}
           region={this.props.region}
+          polylines={this.props.polylines}
         />
       </Container>
     );
