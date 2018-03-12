@@ -28,6 +28,13 @@ const BusDest = styled.Text`
   padding-right: 8px;
   font-size: 20px;
 `;
+const NoLines = styled.Text`
+  color: #777;
+  padding-top: 12px;
+  padding-left: 12px;
+  width: 100%;
+  text-align: center;
+`;
 
 // const AutocompleteContainer = styled.View`
 //   flex: 1;
@@ -63,8 +70,8 @@ export default class Lines extends React.Component {
     Keyboard.dismiss();
   };
 
-  renderSelectedLines = () =>
-    this.props.lines.map((lineId, index) =>
+  renderSelectedLines = () => {
+    const lines = this.props.lines.map((lineId, index) =>
       <MarkerButtonComponent
         lineId={lineId}
         onPress={this.props.removeLine}
@@ -73,6 +80,13 @@ export default class Lines extends React.Component {
         numLines={this.props.lines.length}
       />
     );
+
+    if (!lines.length) {
+      return [<NoLines key="nolines">(No lines selected)</NoLines>];
+    }
+
+    return lines;
+  }
 
   renderItem = ({ shortName, longName }) => (
     <TouchableOpacity onPress={this.submitHandler(shortName)}>
