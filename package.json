@@ -1,6 +1,6 @@
 {
   "name": "busmap",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "devDependencies": {
     "jest-expo": "25.0.0",
     "react-native-scripts": "1.8.1",
