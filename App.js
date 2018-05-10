@@ -32,8 +32,8 @@ export default class App extends React.Component {
           ...curPos.coords,
 
           // Zoom in some more if location known
-          latitudeDelta: 0.05,
-          longitudeDelta: 0.025,
+          latitudeDelta: 0.04,
+          longitudeDelta: 0.02,
         }
       }));
     }
