@@ -26,7 +26,7 @@ const MarkerButton = styled.TouchableOpacity`
   border-radius: 4;
   width: 60;
   align-items: center;
-  margin: 4px;
+  margin: 6px;
 `;
 
 export class Marker extends React.Component {

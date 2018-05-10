@@ -187,11 +187,12 @@ const styles = StyleSheet.create({
   inputContainer: {
     height: 40,
     width: 150,
+    borderWidth: 0,
   },
   lineContainer: {
     height: 40,
     marginLeft: 150,
     backgroundColor: 'white',
-    flex: 1
+    flex: 1,
   }
 });
