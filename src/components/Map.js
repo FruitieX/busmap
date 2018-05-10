@@ -70,7 +70,7 @@ export default class Map extends React.Component {
       .forEach(([shortName, polyline]) => {
         const index = this.props.lines.indexOf(shortName);
         const color = indexToHue(index, this.props.lines.length);
-        const hexColor = `${hsl(color, 70, 50)}aa`;
+        const hexColor = `${hsl(color, 100, 35)}aa`;
 
         polylines.push(
           <MapView.Polyline
