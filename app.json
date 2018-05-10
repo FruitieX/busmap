@@ -13,7 +13,7 @@
     },
     "android": {
       "package": "org.fruitiex.busmap",
-      "versionCode": 2,
+      "versionCode": 3,
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION"
