@@ -10,7 +10,8 @@ import {
   Text,
   StyleSheet,
   Keyboard,
-  Platform
+  Platform,
+  Dimensions
 } from 'react-native';
 
 import styled from 'styled-components/native';
@@ -51,7 +52,7 @@ export default class Lines extends React.Component {
     active: false,
   };
 
-  onChangeText = text => this.setState({ text: text.trim() });
+  changeHandler = text => this.setState({ text: text.trim() });
 
   submitHandler = (lineId) => () => {
     if (!lineId || !lineId.length) return;
@@ -136,8 +137,8 @@ export default class Lines extends React.Component {
     this.keyboardDidHideListener.remove();
   };
 
-  activeStyle = Platform.OS === 'ios' ? { height: 340 } : { flex: 3 };
-  inactiveStyle = { height: 80 };
+  activeStyle = Platform.OS === 'ios' ? { height: 340 } : { flex: 3, flexDirection: 'row', position: 'relative' };
+  inactiveStyle = { height: 40, flexDirection: 'row', position: 'relative' };
 
   render = () => (
     <View style={this.state.active ? this.activeStyle : this.inactiveStyle}>
@@ -145,6 +146,7 @@ export default class Lines extends React.Component {
           autoCapitalize="none"
           autoCorrect={false}
           containerStyle={styles.autocompleteContainer}
+          inputContainerStyle={styles.inputContainer}
           listStyle={{
             borderWidth: 0,
             marginHorizontal: 0,
@@ -152,23 +154,19 @@ export default class Lines extends React.Component {
             backgroundColor: 'white',
             zIndex: 1,
             //position: 'relative',
-            height: Platform.OS === 'ios' ? 300 : undefined
+            height: Platform.OS === 'ios' ? 300 : undefined,
           }}
           data={this.findLines()}
           defaultValue={this.state.text}
-          onChangeText={this.onChangeText}
+          onChangeText={this.changeHandler}
           onSubmitEditing={this.submitHandler(this.state.text)}
-          placeholder="Enter bus line number"
+          placeholder="Enter route number"
           renderItem={this.renderItem}
           onShowResults={this.onShowResults}
         />
-      {/* <Button
-        onPress={this.submitHandler(this.state.text)}
-        title="Add to map"
-      /> */}
       <ScrollView
         keyboardShouldPersistTaps="always"
-        style={{ height: 40, flexGrow: 0, backgroundColor: 'white' }}
+        style={styles.lineContainer}
         horizontal
       >
         {this.renderSelectedLines()}
@@ -179,7 +177,21 @@ export default class Lines extends React.Component {
 
 const styles = StyleSheet.create({
   autocompleteContainer: {
-    flex: 1,
-    zIndex: 1
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    zIndex: 1,
+    width: '100%',
+    height: '100%'
+  },
+  inputContainer: {
+    height: 40,
+    width: 150,
+  },
+  lineContainer: {
+    height: 40,
+    marginLeft: 150,
+    backgroundColor: 'white',
+    flex: 1
   }
 });
