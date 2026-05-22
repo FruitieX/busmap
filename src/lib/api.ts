@@ -46,7 +46,11 @@ export const normalizeMode = (mode?: string, gtfsId?: string): TransportMode => 
     if (m === 'rail') return 'train';
     if (m === 'bus') return 'bus';
     if (m === 'tram') return 'tram';
+    if (m === 'metro') return 'metro';
+    if (m === 'train') return 'train';
     if (m === 'ferry') return 'ferry';
+    if (m === 'ubus') return 'ubus';
+    if (m === 'robot') return 'robot';
   }
 
   if (!gtfsId) return 'bus';
@@ -69,13 +73,36 @@ export const normalizeMode = (mode?: string, gtfsId?: string): TransportMode => 
 };
 
 interface RoutesResponse {
-  routes: Array<{
-    gtfsId: string;
-    shortName: string;
-    longName: string;
-    mode?: string;
-  }>;
+  routes: Array<RawRoute | null>;
 }
+
+interface RawRoute {
+  gtfsId?: string | null;
+  shortName?: string | null;
+  longName?: string | null;
+  mode?: string | null;
+  color?: string | null;
+}
+
+type SearchableRawRoute = RawRoute & {
+  gtfsId: string;
+  shortName: string;
+  longName: string;
+};
+
+const isSearchableRoute = (route: RawRoute | null): route is SearchableRawRoute => (
+  typeof route?.gtfsId === 'string' && route.gtfsId.length > 0
+  && typeof route.shortName === 'string' && route.shortName.length > 0
+  && typeof route.longName === 'string'
+);
+
+const normalizeRoute = (route: SearchableRawRoute): Route => ({
+  gtfsId: route.gtfsId,
+  shortName: route.shortName,
+  longName: route.longName,
+  mode: normalizeMode(route.mode ?? undefined, route.gtfsId),
+  color: route.color ?? undefined,
+});
 
 export const fetchAllRoutes = async (): Promise<Route[]> => {
   const query = `{
@@ -94,14 +121,10 @@ export const fetchAllRoutes = async (): Promise<Route[]> => {
   const routes: Route[] = [];
 
   for (const route of data.routes) {
+    if (!isSearchableRoute(route)) continue;
     if (!seen.has(route.shortName)) {
       seen.add(route.shortName);
-      routes.push({
-        gtfsId: route.gtfsId,
-        shortName: route.shortName,
-        longName: route.longName,
-        mode: normalizeMode(route.mode, route.gtfsId),
-      });
+      routes.push(normalizeRoute(route));
     }
   }
 
@@ -147,13 +170,8 @@ export const fetchRoutesByIds = async (routeIds: string[]): Promise<Route[]> => 
   const data = await graphqlFetch<RoutesResponse>(query);
 
   return data.routes
-    .filter((route) => route != null)
-    .map((route) => ({
-      gtfsId: route.gtfsId,
-      shortName: route.shortName,
-      longName: route.longName,
-      mode: normalizeMode(route.mode, route.gtfsId),
-    }));
+    .filter(isSearchableRoute)
+    .map(normalizeRoute);
 };
 
 export const fetchRoutePatterns = async (routeIds: string[]): Promise<Map<string, RoutePattern[]>> => {
@@ -204,7 +222,7 @@ const ROUTES_CACHE_KEY = 'busmap-routes-cache';
 const ROUTES_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
 interface RoutesCache {
-  routes: Route[];
+  routes: RawRoute[];
   timestamp: number;
 }
 
@@ -219,7 +237,14 @@ export const getCachedRoutes = (): Route[] | null => {
       return null;
     }
 
-    return data.routes;
+    const routes = data.routes.filter(isSearchableRoute).map(normalizeRoute);
+    if (routes.length === 0) {
+      localStorage.removeItem(ROUTES_CACHE_KEY);
+      return null;
+    }
+
+    setCachedRoutes(routes);
+    return routes;
   } catch {
     return null;
   }

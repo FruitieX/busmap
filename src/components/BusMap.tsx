@@ -490,9 +490,13 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
         // Base opacity from staleness and exit
         let opacity = (1 - staleness) * (1 - exitProgress);
         
-        // Fade factor for vehicles not on the selected route or stop
+        // Fade factor for vehicles outside the active map focus
         let routeFadeFactor = 1;
-        if (currentSelectedRouteId) {
+        if (currentSelectedId) {
+          if (vehicle.vehicleId !== currentSelectedId) {
+            routeFadeFactor = 0.1;
+          }
+        } else if (currentSelectedRouteId) {
           const vehicleRouteId = `HSL:${vehicle.routeId}`;
           if (vehicleRouteId !== currentSelectedRouteId) {
             routeFadeFactor = 0.1; // Fade non-selected route vehicles
@@ -774,11 +778,12 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
       if (newId) {
         setIsFollowingVehicle(true);
         isFollowingVehicleRef.current = true;
+        onRouteSelect?.(null);
       }
       onVehicleSelect?.(newId);
       onVehicleClick?.(vehicle);
     },
-    [selectedVehicleId, onVehicleSelect, onVehicleClick]
+    [selectedVehicleId, onVehicleSelect, onVehicleClick, onRouteSelect]
   );
 
   // Handle click on vehicle WebGL layer
@@ -883,6 +888,11 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
     });
   }, [selectedRoute, selectedRouteId, onSubscribe]);
 
+  const selectedVehicleRouteGtfsId = selectedVehicle ? `HSL:${selectedVehicle.routeId}` : null;
+  const selectedVehicleRouteMode = selectedVehicle?.mode;
+  // Convert MQTT direction (1/2) to GTFS direction (0/1)
+  const selectedVehicleGtfsDir = selectedVehicle ? selectedVehicle.direction - 1 : null;
+
   // Build GeoJSON for route lines
   const routeLinesGeoJson = useMemo((): FeatureCollection<LineString> => {
     if (!showRouteLines || !patterns) {
@@ -894,20 +904,29 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
     // Track which route IDs have already been rendered
     const renderedRouteIds = new Set<string>();
 
+    const getRouteFocus = (routeId: string, isSelectedRoute: boolean) => {
+      const isVehicleRoute = selectedVehicleRouteGtfsId === routeId;
+      const isFocused = isSelectedRoute || isVehicleRoute;
+      let opacity = isFocused ? 1 : 0.6;
+
+      if (selectedVehicleRouteGtfsId && !isVehicleRoute) {
+        opacity = 0.1;
+      } else if (selectedRouteId && !isSelectedRoute) {
+        opacity = 0.1;
+      } else if (selectedStopRouteIds.size > 0) {
+        opacity = selectedStopRouteIds.has(routeId) ? 1 : 0.1;
+      }
+
+      return { isFocused, opacity };
+    };
+
     // Render subscribed routes
     for (const route of subscribedRoutes) {
       const routePatterns = patterns.get(route.gtfsId);
       if (!routePatterns) continue;
       renderedRouteIds.add(route.gtfsId);
       const isSelected = selectedRouteId === route.gtfsId;
-      
-      // When a route or stop is selected, fade out other routes
-      let opacity = isSelected ? 1 : 0.6;
-      if (selectedRouteId && !isSelected) {
-        opacity = 0.1; // Fade non-selected routes when one is selected
-      } else if (selectedStopRouteIds.size > 0) {
-        opacity = selectedStopRouteIds.has(route.gtfsId) ? 1 : 0.1;
-      }
+      const { isFocused, opacity } = getRouteFocus(route.gtfsId, isSelected);
 
       for (const pattern of routePatterns) {
         if (pattern.geometry.length < 2) continue;
@@ -922,9 +941,9 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
               colorMode: routeColorMode,
               isSubscribed: true,
             }),
-            isSelected,
+            isSelected: isFocused,
             opacity,
-            sortKey: isSelected ? 3 : 2,
+            sortKey: isFocused ? 3 : 2,
           },
           geometry: {
             type: 'LineString',
@@ -936,6 +955,9 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
 
     // Render temporarily activated routes (from selectedRouteId, selectedStopRouteIds, or nearbyRouteIds)
     const tempRouteIds = new Set<string>();
+    if (selectedVehicleRouteGtfsId && !renderedRouteIds.has(selectedVehicleRouteGtfsId)) {
+      tempRouteIds.add(selectedVehicleRouteGtfsId);
+    }
     if (selectedRouteId && !renderedRouteIds.has(selectedRouteId)) {
       tempRouteIds.add(selectedRouteId);
     }
@@ -956,15 +978,12 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
       const routePatterns = patterns.get(routeId);
       if (!routePatterns) continue;
       const isSelected = selectedRouteId === routeId;
-      let opacity = isSelected ? 1 : 0.6;
-      if (selectedRouteId && !isSelected) {
-        opacity = 0.1;
-      } else if (selectedStopRouteIds.size > 0) {
-        opacity = selectedStopRouteIds.has(routeId) ? 1 : 0.1;
-      }
+      const { isFocused, opacity } = getRouteFocus(routeId, isSelected);
       // Resolve route mode from activated route, nearby stops, or fallback
       let mode: Route['mode'] = 'bus';
-      if (activatedRoute && routeId === activatedRoute.gtfsId && activatedRoute.mode) {
+      if (routeId === selectedVehicleRouteGtfsId && selectedVehicleRouteMode) {
+        mode = selectedVehicleRouteMode;
+      } else if (activatedRoute && routeId === activatedRoute.gtfsId && activatedRoute.mode) {
         mode = activatedRoute.mode;
       } else if (nearbyStops) {
         for (const stop of nearbyStops) {
@@ -991,9 +1010,9 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
           properties: {
             routeId,
             color,
-            isSelected,
+            isSelected: isFocused,
             opacity,
-            sortKey: isSelected ? 3 : 1,
+            sortKey: isFocused ? 3 : 1,
           },
           geometry: {
             type: 'LineString',
@@ -1004,15 +1023,11 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
     }
 
     return { type: 'FeatureCollection', features };
-  }, [patterns, subscribedRoutes, showRouteLines, selectedRouteId, selectedStopRouteIds, nearbyStops, nearbyRouteIds, activatedRoute, routeColorMode]);
+  }, [patterns, subscribedRoutes, showRouteLines, selectedVehicleRouteGtfsId, selectedVehicleRouteMode, selectedRouteId, selectedStopRouteIds, nearbyStops, nearbyRouteIds, activatedRoute, routeColorMode]);
 
   // Build GeoJSON for stop markers
   // Always show the selected stop and subscribed stops, even if showStops is off
   // Also highlight stops on the selected vehicle's route
-  const selectedVehicleRouteGtfsId = selectedVehicle ? `HSL:${selectedVehicle.routeId}` : null;
-  // Convert MQTT direction (1/2) to GTFS direction (0/1)
-  const selectedVehicleGtfsDir = selectedVehicle ? selectedVehicle.direction - 1 : null;
-
   const stopsGeoJson = useMemo((): FeatureCollection<Point> => {
     // Collect all stops to show, deduplicating by gtfsId
     const stopById: Record<string, Stop> = {};

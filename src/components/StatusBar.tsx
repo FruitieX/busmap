@@ -1,7 +1,7 @@
 import { memo, useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useVehicleStore, useSubscriptionStore, useSubscribedStopStore, useSettingsStore } from '@/stores';
-import { useRoutes, getStopTermini, resolveRouteColor } from '@/lib';
+import { useRoutes, getStopTermini, normalizeMode, resolveRouteColor } from '@/lib';
 import type { Route, TransportMode, Stop, StopRoute } from '@/types';
 import { TRANSPORT_COLORS } from '@/types';
 import { StarToggleButton } from './StarToggleButton';
@@ -31,20 +31,36 @@ const MODE_LABELS: Record<TransportMode, string> = {
   robot: 'Robot',
 };
 
-const DEFAULT_FILTERS = new Set<TransportMode | 'stops'>([...MODE_ORDER.filter((m) => m !== 'ferry'), 'stops']);
+type SearchFilter = TransportMode | 'stops';
 
-const loadFilters = (): Set<TransportMode | 'stops'> => {
+const DEFAULT_FILTERS = new Set<SearchFilter>([...MODE_ORDER.filter((m) => m !== 'ferry'), 'stops']);
+
+const isModeFilter = (filter: string): filter is TransportMode => MODE_ORDER.some((mode) => mode === filter);
+
+const normalizeFilter = (filter: string): SearchFilter | null => {
+  const normalized = filter.toLowerCase();
+  if (normalized === 'stops') return 'stops';
+  if (normalized === 'subway') return 'metro';
+  if (normalized === 'rail') return 'train';
+  if (isModeFilter(normalized)) return normalized;
+  return null;
+};
+
+const loadFilters = (): Set<SearchFilter> => {
   try {
     const stored = localStorage.getItem(FILTERS_STORAGE_KEY);
     if (stored) {
       const arr = JSON.parse(stored) as string[];
-      if (Array.isArray(arr) && arr.length > 0) return new Set(arr as Array<TransportMode | 'stops'>);
+      if (Array.isArray(arr) && arr.length > 0) {
+        const filters = new Set(arr.map(normalizeFilter).filter((filter): filter is SearchFilter => filter !== null));
+        if (filters.size > 0) return filters;
+      }
     }
   } catch { /* ignore */ }
   return new Set(DEFAULT_FILTERS);
 };
 
-const saveFilters = (filters: Set<TransportMode | 'stops'>) => {
+const saveFilters = (filters: Set<SearchFilter>) => {
   try {
     localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify([...filters]));
   } catch { /* ignore */ }
@@ -69,7 +85,7 @@ const StatusBarComponent = ({ onActivateRoute, onToggleRouteSubscription, nearby
 
   const [isSearching, setIsSearching] = useState(false);
   const [search, setSearch] = useState('');
-  const [activeFilters, setActiveFilters] = useState<Set<TransportMode | 'stops'>>(loadFilters);
+  const [activeFilters, setActiveFilters] = useState<Set<SearchFilter>>(loadFilters);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
@@ -77,6 +93,13 @@ const StatusBarComponent = ({ onActivateRoute, onToggleRouteSubscription, nearby
   const historyPushedRef = useRef(false);
   const keyboardNavRef = useRef(false);
   const { data: routes } = useRoutes();
+  const normalizedRoutes = useMemo(
+    () => routes?.map((route) => ({
+      ...route,
+      mode: normalizeMode(route.mode, route.gtfsId),
+    })) ?? [],
+    [routes],
+  );
 
   const showStops = activeFilters.has('stops');
   const showRoutes = MODE_ORDER.some((m) => activeFilters.has(m));
@@ -96,7 +119,7 @@ const StatusBarComponent = ({ onActivateRoute, onToggleRouteSubscription, nearby
     return map;
   }, [showNearbyRoutes, nearbyStops]);
 
-  const toggleFilter = useCallback((filter: TransportMode | 'stops') => {
+  const toggleFilter = useCallback((filter: SearchFilter) => {
     setActiveFilters((prev) => {
       const next = new Set(prev);
       if (next.has(filter)) {
@@ -179,8 +202,8 @@ const StatusBarComponent = ({ onActivateRoute, onToggleRouteSubscription, nearby
     const items: Array<SearchResultItem & { matchTier: number; distance: number; sortName: string }> = [];
 
     // Add matching routes
-    if (showRoutes && routes) {
-      let filtered = routes.filter((r) => r.mode && activeFilters.has(r.mode));
+    if (showRoutes) {
+      let filtered = normalizedRoutes.filter((r) => activeFilters.has(r.mode));
       if (searchLower) {
         filtered = filtered.filter(
           (r) =>
@@ -251,7 +274,7 @@ const StatusBarComponent = ({ onActivateRoute, onToggleRouteSubscription, nearby
     });
 
     return items.slice(0, 50);
-  }, [search, routes, nearbyStops, activeFilters, showRoutes, showStops, routeDistanceMap]);
+  }, [search, normalizedRoutes, nearbyStops, activeFilters, showRoutes, showStops, routeDistanceMap]);
 
   // Reset selection when results change
   useEffect(() => {
@@ -260,10 +283,10 @@ const StatusBarComponent = ({ onActivateRoute, onToggleRouteSubscription, nearby
 
   // Available modes in the data
   const availableModes = useMemo(() => {
-    if (!routes) return [];
-    const modes = new Set(routes.map((r) => r.mode).filter(Boolean));
+    if (normalizedRoutes.length === 0) return [];
+    const modes = new Set(normalizedRoutes.map((r) => r.mode));
     return MODE_ORDER.filter((m) => modes.has(m));
-  }, [routes]);
+  }, [normalizedRoutes]);
 
   const handleSearchClick = useCallback(() => {
     setIsSearching(true);

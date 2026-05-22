@@ -133,6 +133,9 @@ const App = () => {
   }, [nearbyRadius]);
   const theme = useSettingsStore((state) => state.theme);
   const subscribedRoutes = useSubscriptionStore((state) => state.subscribedRoutes);
+  const selectedVehicleRouteId = useVehicleStore((state) => (
+    selectedVehicleId ? state.vehicles.get(selectedVehicleId)?.routeId : undefined
+  ));
   const { subscribeToRoute, unsubscribeFromRoute } = useSubscriptionStore();
   const flyToUserLocation = useLocationStore((state) => state.flyToUserLocation);
   const setBottomPadding = useLocationStore((state) => state.setBottomPadding);
@@ -648,6 +651,7 @@ const App = () => {
 
   const routeIds = useMemo(() => {
     const ids = new Set(subscribedRoutes.map((r) => r.gtfsId));
+    if (selectedVehicleRouteId) ids.add(`HSL:${selectedVehicleRouteId}`);
     // Include selected route if not already subscribed
     if (selectedRouteId) ids.add(selectedRouteId);
     // Include stop routes if a stop is selected
@@ -655,7 +659,7 @@ const App = () => {
     // Include nearby routes when enabled
     for (const id of nearbyRouteIds) ids.add(id);
     return Array.from(ids);
-  }, [subscribedRoutes, selectedRouteId, selectedStopRouteIds, nearbyRouteIds]);
+  }, [subscribedRoutes, selectedVehicleRouteId, selectedRouteId, selectedStopRouteIds, nearbyRouteIds]);
   const { data: patterns } = useRoutePatterns(routeIds);
 
   return (

@@ -1,17 +1,26 @@
-import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { fetchAllRoutes, fetchRoutePatterns, fetchNearbyStops, fetchStopTimetable, getCachedRoutes, setCachedRoutes, isApiKeyConfigured } from './api';
 import type { StopTimetableResult } from './api';
 import type { Route, RoutePattern, Stop } from '@/types';
 
+const ROUTES_QUERY_KEY = ['routes', 'normalized'] as const;
+
 export const useRoutes = () => {
+  const queryClient = useQueryClient();
+
   return useQuery<Route[], Error>({
-    queryKey: ['routes'],
+    queryKey: ROUTES_QUERY_KEY,
     queryFn: async () => {
       // Try cache first
       const cached = getCachedRoutes();
       if (cached) {
         // Still fetch in background to update cache
-        fetchAllRoutes().then(setCachedRoutes).catch(() => {});
+        fetchAllRoutes()
+          .then((routes) => {
+            setCachedRoutes(routes);
+            queryClient.setQueryData(ROUTES_QUERY_KEY, routes);
+          })
+          .catch(() => {});
         return cached;
       }
 
