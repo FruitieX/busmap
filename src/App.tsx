@@ -23,7 +23,7 @@ import {
   requestUserLocation,
   watchUserLocation,
 } from '@/stores';
-import { mqttService, resolveRouteColor, useRoutePatterns, useNearbyStops } from '@/lib';
+import { haversineDistance, mqttService, resolveRouteColor, useRoutePatterns, useStops } from '@/lib';
 import type { Route, TrackedVehicle, BoundingBox, SubscribedRoute, Stop, StopDeparture } from '@/types';
 import {
   SHEET_MIN_HEIGHT,
@@ -90,6 +90,21 @@ const isSameSheetHistoryEntry = (a: SheetHistoryEntry, b: SheetHistoryEntry): bo
 };
 
 const TAB_STORAGE_KEY = 'busmap-active-tab';
+
+type StopWithOptionalDistance = Stop & { distance?: number };
+type StopWithDistance = Stop & { distance: number };
+
+const hasStopDistance = (stop: StopWithOptionalDistance): stop is StopWithDistance => typeof stop.distance === 'number';
+
+const compareStopsByDistanceThenName = (a: StopWithOptionalDistance, b: StopWithOptionalDistance) => {
+  const distanceDiff = (a.distance ?? Infinity) - (b.distance ?? Infinity);
+  if (distanceDiff !== 0) return distanceDiff;
+
+  const codeCompare = a.code.localeCompare(b.code, undefined, { numeric: true, sensitivity: 'base' });
+  if (codeCompare !== 0) return codeCompare;
+
+  return a.name.localeCompare(b.name);
+};
 
 const loadSavedTab = (): SheetTab => {
   try {
@@ -254,9 +269,8 @@ const App = () => {
     [effectiveLocation?.latitude, effectiveLocation?.longitude]
   );
 
-  // Stable coordinates for nearby stops query — only updates when the user
-  // moves more than ~150m from the last query position, avoiding both constant
-  // GPS jitter and the rounding-boundary oscillation problem.
+  // Stable coordinates for nearby calculations — only updates when the user
+  // moves more than ~150m from the last position, avoiding constant GPS jitter.
   const stableCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
   const STABLE_THRESHOLD_DEG = 0.0015; // ~150m
   const stableCoords = useMemo(() => {
@@ -271,25 +285,29 @@ const App = () => {
     return next;
   }, [userCoords?.lat, userCoords?.lng]);
 
-  // Nearby stops query - fetch 100 nearest stops (large radius so `first: 100` is the actual limit)
-  const { data: allNearbyStops, isLoading: stopsLoading } = useNearbyStops(
-    stableCoords?.lat ?? null,
-    stableCoords?.lng ?? null,
-    4000,
-  );
+  const { data: allStops, isLoading: stopsLoading } = useStops();
 
-  // Filter nearby stops by the user-configured radius
-  const nearbyStopsWithinRadius = useMemo(
-    () => allNearbyStops?.filter((s) => s.distance <= nearbyRadius),
-    [allNearbyStops, nearbyRadius],
-  );
+  const stopsForSearch = useMemo<StopWithOptionalDistance[]>(() => {
+    if (!allStops) return [];
 
-  // When nearby modes are disabled, keep using unfiltered nearby stops so radius
-  // tweaks don't reorder unrelated route/search lists.
-  const nearbyStopsForUi = useMemo(
-    () => (anyNearbyActive ? nearbyStopsWithinRadius : allNearbyStops),
-    [anyNearbyActive, nearbyStopsWithinRadius, allNearbyStops],
-  );
+    if (!stableCoords) {
+      return [...allStops].sort(compareStopsByDistanceThenName);
+    }
+
+    return allStops
+      .map((stop) => ({
+        ...stop,
+        distance: haversineDistance(stableCoords.lat, stableCoords.lng, stop.lat, stop.lon),
+      }))
+      .sort(compareStopsByDistanceThenName);
+  }, [allStops, stableCoords]);
+
+  const nearbyStopsWithinRadius = useMemo<StopWithDistance[]>(() => {
+    if (!stableCoords) return [];
+    return stopsForSearch
+      .filter(hasStopDistance)
+      .filter((stop) => stop.distance <= nearbyRadius);
+  }, [stopsForSearch, stableCoords, nearbyRadius]);
 
   // Apply theme
   useEffect(() => {
@@ -801,11 +819,9 @@ const App = () => {
     const subscribed = subscribedRoutes.find((route) => route.gtfsId === selectedRouteId);
     if (subscribed) return subscribed;
 
-    if (nearbyStopsForUi) {
-      for (const stop of nearbyStopsForUi) {
-        const stopRoute = stop.routes.find((route) => route.gtfsId === selectedRouteId);
-        if (stopRoute) return { ...stopRoute };
-      }
+    for (const stop of stopsForSearch) {
+      const stopRoute = stop.routes.find((route) => route.gtfsId === selectedRouteId);
+      if (stopRoute) return { ...stopRoute };
     }
 
     const vehicle = vehicles.find((v) => `HSL:${v.routeId}` === selectedRouteId);
@@ -823,7 +839,7 @@ const App = () => {
     }
 
     return null;
-  }, [selectedRouteId, subscribedRoutes, nearbyStopsForUi, vehicles, activatedRoute]);
+  }, [selectedRouteId, subscribedRoutes, stopsForSearch, vehicles, activatedRoute]);
 
   const selectedRoutePatterns = selectedRouteId ? patterns?.get(selectedRouteId) : undefined;
   const isSelectedRouteSubscribed = selectedRouteId
@@ -942,7 +958,7 @@ const App = () => {
       />
 
       {/* Status bar with search */}
-      <StatusBar onActivateRoute={handleActivateRoute} onToggleRouteSubscription={handleSelectRoute} nearbyStops={nearbyStopsForUi} onStopClick={handleStopClick} />
+      <StatusBar onActivateRoute={handleActivateRoute} onToggleRouteSubscription={handleSelectRoute} stops={stopsForSearch} onStopClick={handleStopClick} />
 
       {/* FABs - bottom right, move with bottom sheet */}
       <motion.div
@@ -1186,7 +1202,7 @@ const App = () => {
             />
           ) : (
             <NearbyStops
-              stops={nearbyStopsForUi ?? []}
+              stops={nearbyStopsWithinRadius}
               isLoading={stopsLoading}
               onStopClick={handleStopClick}
             />

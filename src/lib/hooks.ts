@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
-import { fetchAllRoutes, fetchRoutePatterns, fetchNearbyStops, fetchStopTimetable, getCachedRoutes, setCachedRoutes, isApiKeyConfigured } from './api';
+import { fetchAllRoutes, fetchAllStops, fetchRoutePatterns, fetchStopTimetable, getCachedRoutes, getCachedStops, setCachedRoutes, setCachedStops, isApiKeyConfigured } from './api';
 import type { StopTimetableResult } from './api';
 import type { Route, RoutePattern, Stop } from '@/types';
 
 const ROUTES_QUERY_KEY = ['routes', 'normalized'] as const;
+const STOPS_QUERY_KEY = ['stops', 'normalized'] as const;
 
 export const useRoutes = () => {
   const queryClient = useQueryClient();
@@ -35,6 +36,34 @@ export const useRoutes = () => {
   });
 };
 
+export const useStops = (enabled = true) => {
+  const queryClient = useQueryClient();
+
+  return useQuery<Stop[], Error>({
+    queryKey: STOPS_QUERY_KEY,
+    queryFn: async () => {
+      const cached = getCachedStops();
+      if (cached) {
+        fetchAllStops()
+          .then((stops) => {
+            setCachedStops(stops);
+            queryClient.setQueryData(STOPS_QUERY_KEY, stops);
+          })
+          .catch(() => {});
+        return cached;
+      }
+
+      const stops = await fetchAllStops();
+      setCachedStops(stops);
+      return stops;
+    },
+    staleTime: 1000 * 60 * 60, // 1 hour
+    gcTime: 1000 * 60 * 60 * 24, // 24 hours
+    enabled: enabled && isApiKeyConfigured(),
+    retry: 2,
+  });
+};
+
 export const useRoutePatterns = (routeIds: string[]) => {
   return useQuery<Map<string, RoutePattern[]>, Error>({
     queryKey: ['routePatterns', routeIds],
@@ -43,18 +72,6 @@ export const useRoutePatterns = (routeIds: string[]) => {
     gcTime: 1000 * 60 * 60 * 24, // 24 hours
     enabled: routeIds.length > 0 && isApiKeyConfigured(),
     placeholderData: keepPreviousData, // keep showing old patterns while refetching
-  });
-};
-
-export const useNearbyStops = (lat: number | null, lon: number | null, radius: number) => {
-  return useQuery<Array<Stop & { distance: number }>, Error>({
-    queryKey: ['nearbyStops', lat, lon, radius],
-    queryFn: () => fetchNearbyStops(lat!, lon!, radius),
-    staleTime: 1000 * 60 * 5, // 5 minutes
-    gcTime: 1000 * 60 * 30, // 30 minutes
-    enabled: lat !== null && lon !== null && radius > 0 && isApiKeyConfigured(),
-    refetchOnWindowFocus: false,
-    placeholderData: keepPreviousData, // keep showing old stops while refetching
   });
 };
 

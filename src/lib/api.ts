@@ -84,6 +84,30 @@ interface RawRoute {
   color?: string | null;
 }
 
+interface RawStopRoute {
+  gtfsId?: string | null;
+  shortName?: string | null;
+  longName?: string | null;
+  mode?: string | null;
+}
+
+interface RawStop {
+  gtfsId?: string | null;
+  name?: string | null;
+  code?: string | null;
+  lat?: number | null;
+  lon?: number | null;
+  vehicleMode?: string | null;
+  routes?: RawStopRoute[] | null;
+  patterns?: Array<{
+    headsign?: string | null;
+    directionId?: number | null;
+    route?: {
+      gtfsId?: string | null;
+    } | null;
+  } | null> | null;
+}
+
 type SearchableRawRoute = RawRoute & {
   gtfsId: string;
   shortName: string;
@@ -103,6 +127,84 @@ const normalizeRoute = (route: SearchableRawRoute): Route => ({
   mode: normalizeMode(route.mode ?? undefined, route.gtfsId),
   color: route.color ?? undefined,
 });
+
+const isSearchableStop = (stop: RawStop | null): stop is RawStop & {
+  gtfsId: string;
+  name: string;
+  lat: number;
+  lon: number;
+} => (
+  typeof stop?.gtfsId === 'string' && stop.gtfsId.length > 0
+  && typeof stop.name === 'string' && stop.name.length > 0
+  && typeof stop.lat === 'number'
+  && typeof stop.lon === 'number'
+);
+
+const isSearchableStopRoute = (route: RawStopRoute | null): route is RawStopRoute & {
+  gtfsId: string;
+  shortName: string;
+  longName: string;
+} => (
+  typeof route?.gtfsId === 'string' && route.gtfsId.length > 0
+  && typeof route.shortName === 'string' && route.shortName.length > 0
+  && typeof route.longName === 'string'
+);
+
+const getStopPatternMetadata = (stop: RawStop) => {
+  const headsigns = new Set<string>();
+  const routeDirections: Record<string, number[]> = {};
+
+  for (const pattern of stop.patterns ?? []) {
+    if (!pattern) continue;
+
+    if (pattern.headsign) {
+      headsigns.add(pattern.headsign);
+    }
+
+    const routeId = pattern.route?.gtfsId;
+    if (!routeId || typeof pattern.directionId !== 'number') continue;
+
+    if (!(routeId in routeDirections)) {
+      routeDirections[routeId] = [];
+    }
+    if (!routeDirections[routeId].includes(pattern.directionId)) {
+      routeDirections[routeId].push(pattern.directionId);
+    }
+  }
+
+  return {
+    headsigns: Array.from(headsigns),
+    routeDirections,
+  };
+};
+
+const normalizeStop = (stop: RawStop & {
+  gtfsId: string;
+  name: string;
+  lat: number;
+  lon: number;
+}): Stop => {
+  const { headsigns, routeDirections } = getStopPatternMetadata(stop);
+
+  return {
+    gtfsId: stop.gtfsId,
+    name: stop.name,
+    code: stop.code ?? '',
+    lat: stop.lat,
+    lon: stop.lon,
+    vehicleMode: normalizeMode(stop.vehicleMode ?? undefined),
+    routes: (stop.routes ?? [])
+      .filter(isSearchableStopRoute)
+      .map((route) => ({
+        gtfsId: route.gtfsId,
+        shortName: route.shortName,
+        longName: route.longName,
+        mode: normalizeMode(route.mode ?? undefined, route.gtfsId),
+      })),
+    headsigns,
+    routeDirections,
+  };
+};
 
 export const fetchAllRoutes = async (): Promise<Route[]> => {
   const query = `{
@@ -262,114 +364,97 @@ export const setCachedRoutes = (routes: Route[]): void => {
   }
 };
 
-// Fetch nearby stops by location and radius
-interface StopsByRadiusResponse {
-  stopsByRadius: {
-    edges: Array<{
-      node: {
-        stop: {
-          gtfsId: string;
-          name: string;
-          code: string;
-          lat: number;
-          lon: number;
-          vehicleMode: string;
-          routes: Array<{
-            gtfsId: string;
-            shortName: string;
-            longName: string;
-            mode: string;
-          }>;
-          patterns: Array<{
-            headsign: string;
-            directionId: number;
-            route: {
-              gtfsId: string;
-            };
-          }>;
-        };
-        distance: number;
-      };
-    }>;
-  };
+// Cache stops in localStorage
+const STOPS_CACHE_KEY = 'busmap-stops-cache';
+const STOPS_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+interface StopsCache {
+  stops: Stop[];
+  timestamp: number;
 }
 
-export const fetchNearbyStops = async (
-  lat: number,
-  lon: number,
-  radius: number,
-): Promise<Array<Stop & { distance: number }>> => {
+const isCachedStop = (stop: Stop | null): stop is Stop => (
+  typeof stop?.gtfsId === 'string' && stop.gtfsId.length > 0
+  && typeof stop.name === 'string' && stop.name.length > 0
+  && typeof stop.lat === 'number'
+  && typeof stop.lon === 'number'
+  && Array.isArray(stop.routes)
+);
+
+export const getCachedStops = (): Stop[] | null => {
+  try {
+    const cached = localStorage.getItem(STOPS_CACHE_KEY);
+    if (!cached) return null;
+
+    const data: StopsCache = JSON.parse(cached);
+    if (Date.now() - data.timestamp > STOPS_CACHE_TTL) {
+      localStorage.removeItem(STOPS_CACHE_KEY);
+      return null;
+    }
+
+    const stops = data.stops.filter(isCachedStop);
+    if (stops.length === 0) {
+      localStorage.removeItem(STOPS_CACHE_KEY);
+      return null;
+    }
+
+    return stops;
+  } catch {
+    return null;
+  }
+};
+
+export const setCachedStops = (stops: Stop[]): void => {
+  try {
+    const data: StopsCache = {
+      stops,
+      timestamp: Date.now(),
+    };
+    localStorage.setItem(STOPS_CACHE_KEY, JSON.stringify(data));
+  } catch {
+    // Ignore storage errors
+  }
+};
+
+interface StopsResponse {
+  stops: Array<RawStop | null>;
+}
+
+export const fetchAllStops = async (): Promise<Stop[]> => {
   const query = `{
-    stopsByRadius(lat: ${lat}, lon: ${lon}, radius: ${radius}, first: 300) {
-      edges {
-        node {
-          stop {
-            gtfsId
-            name
-            code
-            lat
-            lon
-            vehicleMode
-            routes {
-              gtfsId
-              shortName
-              longName
-              mode
-            }
-            patterns {
-              headsign
-              directionId
-              route {
-                gtfsId
-              }
-            }
-          }
-          distance
+    stops {
+      gtfsId
+      name
+      code
+      lat
+      lon
+      vehicleMode
+      routes {
+        gtfsId
+        shortName
+        longName
+        mode
+      }
+      patterns {
+        headsign
+        directionId
+        route {
+          gtfsId
         }
       }
     }
   }`;
 
-  const data = await graphqlFetch<StopsByRadiusResponse>(query);
+  const data = await graphqlFetch<StopsResponse>(query);
 
-  return data.stopsByRadius.edges.map(({ node }) => {
-    // Extract unique headsigns from patterns (direction-specific)
-    const headsigns = [...new Set(
-      node.stop.patterns
-        .map((p) => p.headsign)
-        .filter((h): h is string => !!h),
-    )];
-
-    // Build route → directions mapping
-    const routeDirections: Record<string, number[]> = {};
-    for (const p of node.stop.patterns) {
-      const routeId = p.route.gtfsId;
-      if (!(routeId in routeDirections)) {
-        routeDirections[routeId] = [];
-      }
-      if (!routeDirections[routeId].includes(p.directionId)) {
-        routeDirections[routeId].push(p.directionId);
-      }
-    }
-
-    return {
-      gtfsId: node.stop.gtfsId,
-      name: node.stop.name,
-      code: node.stop.code || '',
-      lat: node.stop.lat,
-      lon: node.stop.lon,
-      vehicleMode: normalizeMode(node.stop.vehicleMode),
-      routes: node.stop.routes.map((r) => ({
-        gtfsId: r.gtfsId,
-        shortName: r.shortName,
-        longName: r.longName,
-        mode: normalizeMode(r.mode, r.gtfsId),
-      })),
-      headsigns,
-      routeDirections,
-      distance: node.distance,
-    };
-  });
+  return data.stops
+    .filter(isSearchableStop)
+    .map(normalizeStop)
+    .sort((a, b) => {
+      const codeCompare = a.code.localeCompare(b.code, undefined, { numeric: true, sensitivity: 'base' });
+      if (codeCompare !== 0) return codeCompare;
+      return a.name.localeCompare(b.name);
+    });
 };
 
 // Fetch stop timetable with upcoming departures and direction info

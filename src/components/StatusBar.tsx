@@ -9,13 +9,22 @@ import { StarToggleButton } from './StarToggleButton';
 interface StatusBarProps {
   onActivateRoute?: (route: Route) => void;
   onToggleRouteSubscription?: (route: Route) => void;
-  nearbyStops?: Array<Stop & { distance: number }>;
+  stops?: SearchableStop[];
   onStopClick?: (stop: Stop) => void;
 }
 
 type SearchResultItem =
   | { kind: 'route'; route: Route }
-  | { kind: 'stop'; stop: Stop & { distance: number } };
+  | { kind: 'stop'; stop: SearchableStop };
+
+type SearchableStop = Stop & { distance?: number };
+
+const EMPTY_SEARCHABLE_STOPS: SearchableStop[] = [];
+
+const formatDistance = (meters: number): string => {
+  if (meters < 1000) return `${Math.round(meters)} m`;
+  return `${(meters / 1000).toFixed(1)} km`;
+};
 
 const STOP_FILTER_COLOR = '#6366f1'; // indigo — distinct from all transport mode colors
 const FILTERS_STORAGE_KEY = 'busmap-search-filters';
@@ -98,7 +107,7 @@ const saveFilters = (filters: Set<SearchFilter>) => {
   } catch { /* ignore */ }
 };
 
-const StatusBarComponent = ({ onActivateRoute, onToggleRouteSubscription, nearbyStops, onStopClick }: StatusBarProps) => {
+const StatusBarComponent = ({ onActivateRoute, onToggleRouteSubscription, stops, onStopClick }: StatusBarProps) => {
   const connectionStatus = useVehicleStore((state) => state.connectionStatus);
   const totalVehicleCount = useVehicleStore((state) => state.vehicles.size);
   const subscribedVehicleCount = useVehicleStore((state) => {
@@ -135,12 +144,14 @@ const StatusBarComponent = ({ onActivateRoute, onToggleRouteSubscription, nearby
 
   const showStops = activeFilters.has('stops');
   const showRoutes = MODE_ORDER.some((m) => activeFilters.has(m));
+  const searchableStops = stops ?? EMPTY_SEARCHABLE_STOPS;
 
   // Build route → minimum distance map from nearby stops
   const routeDistanceMap = useMemo(() => {
     const map = new Map<string, number>();
-    if (!showNearbyRoutes || !nearbyStops) return map;
-    for (const stop of nearbyStops) {
+    if (!showNearbyRoutes || !stops) return map;
+    for (const stop of stops) {
+      if (typeof stop.distance !== 'number') continue;
       for (const route of stop.routes as StopRoute[]) {
         const existing = map.get(route.gtfsId);
         if (existing === undefined || stop.distance < existing) {
@@ -149,7 +160,7 @@ const StatusBarComponent = ({ onActivateRoute, onToggleRouteSubscription, nearby
       }
     }
     return map;
-  }, [showNearbyRoutes, nearbyStops]);
+  }, [showNearbyRoutes, stops]);
 
   const toggleFilter = useCallback((filter: SearchFilter) => {
     setActiveFilters((prev) => {
@@ -266,8 +277,8 @@ const StatusBarComponent = ({ onActivateRoute, onToggleRouteSubscription, nearby
     }
 
     // Add matching stops
-    if (showStops && nearbyStops) {
-      let filtered = nearbyStops as Array<Stop & { distance: number }>;
+    if (showStops) {
+      let filtered = searchableStops;
       if (searchLower) {
         filtered = filtered.filter(
           (s) =>
@@ -292,7 +303,7 @@ const StatusBarComponent = ({ onActivateRoute, onToggleRouteSubscription, nearby
           kind: 'stop',
           stop,
           matchTier,
-          distance: stop.distance,
+          distance: stop.distance ?? Infinity,
           sortName: name,
         });
       }
@@ -306,7 +317,7 @@ const StatusBarComponent = ({ onActivateRoute, onToggleRouteSubscription, nearby
     });
 
     return items.slice(0, 50);
-  }, [search, normalizedRoutes, nearbyStops, activeFilters, showRoutes, showStops, routeDistanceMap]);
+  }, [search, normalizedRoutes, searchableStops, activeFilters, showRoutes, showStops, routeDistanceMap]);
 
   // Reset selection when results change
   useEffect(() => {
@@ -620,7 +631,7 @@ const StatusBarComponent = ({ onActivateRoute, onToggleRouteSubscription, nearby
                               )}
                             </div>
                             <div className="text-xs text-gray-500 dark:text-gray-400 capitalize truncate">
-                              {stop.vehicleMode} • {stop.routes.length} routes
+                              {stop.vehicleMode}{stop.distance !== undefined ? ` • ${formatDistance(stop.distance)}` : ''} • {stop.routes.length} routes
                             </div>
                             {(() => {
                               const termini = getStopTermini(stop.routes, stop.headsigns);

@@ -1,7 +1,7 @@
 export { mqttService } from './mqtt';
-export { fetchAllRoutes, fetchRoutesByIds, fetchRoutePatterns, fetchNearbyStops, fetchStopTimetable, fetchStopRoutes, isApiKeyConfigured, normalizeMode } from './api';
+export { fetchAllRoutes, fetchAllStops, fetchRoutesByIds, fetchRoutePatterns, fetchStopTimetable, fetchStopRoutes, isApiKeyConfigured, normalizeMode } from './api';
 export type { StopTimetableResult } from './api';
-export { useRoutes, useRoutePatterns, useNearbyStops, useStopTimetable } from './hooks';
+export { useRoutes, useStops, useRoutePatterns, useStopTimetable } from './hooks';
 export { extrapolate, interpolateVehicle, pruneInterpolationStates } from './interpolation';
 export type { InterpolatedPosition } from './interpolation';
 export { getStopTermini, getUniqueRouteColor, getVehicleTerminusLabel, haversineDistance, resolveRouteColor } from './utils';
