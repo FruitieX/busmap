@@ -431,7 +431,7 @@ const SettingsPanelComponent = ({ isOpen, onClose }: SettingsPanelProps) => {
                     <div>
                       <span className="text-gray-700 dark:text-gray-200">Developer mode</span>
                       <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                        Show extra vehicle details in popovers
+                        Show extra vehicle details in vehicle details
                       </div>
                     </div>
                     <input

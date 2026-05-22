@@ -1,10 +1,7 @@
 export { BusMap } from './BusMap';
-export { useAnimatedPosition } from './VehicleMarker';
-export type { InterpolatedPosition } from './VehicleMarker';
-export { VehiclePopover } from './VehiclePopover';
-export { RoutePopover } from './RoutePopover';
-export { StopPopover } from './StopPopover';
 export { VehicleList } from './VehicleList';
+export { VehicleDetails } from './VehicleDetails';
+export { RouteDetails } from './RouteDetails';
 export { NearbyStops } from './NearbyStops';
 export { StopDetails } from './StopDetails';
 export { BottomSheet } from './BottomSheet';

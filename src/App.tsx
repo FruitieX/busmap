@@ -3,6 +3,8 @@ import { motion, AnimatePresence, useMotionValue, useTransform, type MotionValue
 import {
   BusMap,
   VehicleList,
+  VehicleDetails,
+  RouteDetails,
   NearbyStops,
   StopDetails,
   BottomSheet,
@@ -22,7 +24,7 @@ import {
   watchUserLocation,
 } from '@/stores';
 import { mqttService, resolveRouteColor, useRoutePatterns, useNearbyStops } from '@/lib';
-import type { Route, TrackedVehicle, BoundingBox, SubscribedRoute, RoutePattern, Stop, StopDeparture } from '@/types';
+import type { Route, TrackedVehicle, BoundingBox, SubscribedRoute, Stop, StopDeparture } from '@/types';
 import {
   SHEET_MIN_HEIGHT,
   SHEET_MAX_HEIGHT,
@@ -59,6 +61,34 @@ const LocationIcon = () => (
 
 type SheetTab = 'vehicles' | 'routes' | 'stops';
 
+type SheetHistoryEntry =
+  | { tab: 'vehicles'; vehicleId: string }
+  | { tab: 'routes'; routeId: string; route: Route | SubscribedRoute | null }
+  | { tab: 'stops' };
+
+interface SheetNavigationOptions {
+  preserveHistory?: boolean;
+}
+
+interface MapCameraActions {
+  refollowVehicle: () => void;
+  recenterRoute: () => void;
+  recenterStop: () => void;
+}
+
+interface MapCameraState {
+  isFollowingVehicle: boolean;
+  hasMovedFromRoute: boolean;
+  hasMovedFromStop: boolean;
+}
+
+const isSameSheetHistoryEntry = (a: SheetHistoryEntry, b: SheetHistoryEntry): boolean => {
+  if (a.tab !== b.tab) return false;
+  if (a.tab === 'vehicles' && b.tab === 'vehicles') return a.vehicleId === b.vehicleId;
+  if (a.tab === 'routes' && b.tab === 'routes') return a.routeId === b.routeId;
+  return true;
+};
+
 const TAB_STORAGE_KEY = 'busmap-active-tab';
 
 const loadSavedTab = (): SheetTab => {
@@ -88,9 +118,16 @@ const App = () => {
   const nearbyMenuRef = useRef<HTMLDivElement>(null);
   const nearbyBtnRef = useRef<HTMLButtonElement>(null);
   const [nearbyMenuRect, setNearbyMenuRect] = useState<{ top: number; right: number; above: boolean } | null>(null);
+  const [mapCameraActions, setMapCameraActions] = useState<MapCameraActions | null>(null);
+  const [mapCameraState, setMapCameraState] = useState<MapCameraState>({
+    isFollowingVehicle: true,
+    hasMovedFromRoute: false,
+    hasMovedFromStop: false,
+  });
   const expandSheetRef = useRef<(() => void) | null>(null);
   const sheetContentRef = useRef<HTMLDivElement>(null);
   const stopListScrollRef = useRef(0);
+  const sheetHistoryRef = useRef<SheetHistoryEntry[]>([]);
 
   // Motion-value-driven button position (no React re-render lag)
   const fallbackHeight = useMotionValue(sheetHeight);
@@ -110,6 +147,17 @@ const App = () => {
       saveTab(tab);
     }
   }, [sheetHeight]);
+
+  const showSheetTab = useCallback((tab: SheetTab) => {
+    switchTab(tab);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (sheetContentRef.current) {
+          sheetContentRef.current.scrollTop = 0;
+        }
+      });
+    });
+  }, [switchTab]);
 
   const showNearby = useSettingsStore((state) => state.showNearby);
   const nearbyRadius = useSettingsStore((state) => state.nearbyRadius);
@@ -133,9 +181,10 @@ const App = () => {
   }, [nearbyRadius]);
   const theme = useSettingsStore((state) => state.theme);
   const subscribedRoutes = useSubscriptionStore((state) => state.subscribedRoutes);
-  const selectedVehicleRouteId = useVehicleStore((state) => (
-    selectedVehicleId ? state.vehicles.get(selectedVehicleId)?.routeId : undefined
-  ));
+  const vehiclesMap = useVehicleStore((state) => state.vehicles);
+  const vehicles = useMemo(() => Array.from(vehiclesMap.values()), [vehiclesMap]);
+  const selectedVehicle = selectedVehicleId ? vehiclesMap.get(selectedVehicleId) ?? null : null;
+  const selectedVehicleRouteId = selectedVehicle?.routeId;
   const { subscribeToRoute, unsubscribeFromRoute } = useSubscriptionStore();
   const flyToUserLocation = useLocationStore((state) => state.flyToUserLocation);
   const setBottomPadding = useLocationStore((state) => state.setBottomPadding);
@@ -161,6 +210,39 @@ const App = () => {
       }
     }
     tempMqttRouteIds.current.clear();
+  }, []);
+
+  const clearSheetHistory = useCallback(() => {
+    sheetHistoryRef.current = [];
+  }, []);
+
+  const pushCurrentSheetView = useCallback(() => {
+    let entry: SheetHistoryEntry | null = null;
+
+    if (activeTab === 'vehicles' && selectedVehicleId) {
+      entry = { tab: 'vehicles', vehicleId: selectedVehicleId };
+    } else if (activeTab === 'routes' && selectedRouteId) {
+      entry = { tab: 'routes', routeId: selectedRouteId, route: activatedRoute };
+    } else if (activeTab === 'stops' && selectedStop) {
+      entry = { tab: 'stops' };
+    }
+
+    if (!entry) return;
+
+    const stack = sheetHistoryRef.current;
+    const top = stack[stack.length - 1];
+    if (!top || !isSameSheetHistoryEntry(top, entry)) {
+      stack.push(entry);
+    }
+  }, [activeTab, selectedVehicleId, selectedRouteId, activatedRoute, selectedStop]);
+
+  const ensureTemporaryRouteSubscription = useCallback((route: Route | SubscribedRoute) => {
+    const permanentIds = new Set(useSubscriptionStore.getState().subscribedRoutes.map((r) => r.gtfsId));
+    if (!permanentIds.has(route.gtfsId)) {
+      tempMqttRouteIds.current.add(route.gtfsId);
+      mqttService.subscribeToRoute(route.gtfsId);
+      mqttService.addActiveRoute(route.gtfsId);
+    }
   }, []);
 
   // Get user location for nearby mode and stops - only extract lat/lng to avoid spam from timestamp changes
@@ -310,43 +392,34 @@ const App = () => {
 
   // Handle route activation (select without subscribing) - for nearby routes and search
   const handleActivateRoute = useCallback(
-    (route: Route) => {
+    (route: Route, options?: SheetNavigationOptions) => {
+      if (!options?.preserveHistory) clearSheetHistory();
       setSelectedVehicleId(null);
       clearSelectedStop();
       cleanupTempSubscriptions();
 
-      // If already permanently subscribed, just select it
-      const permanentIds = new Set(useSubscriptionStore.getState().subscribedRoutes.map((r) => r.gtfsId));
-      if (!permanentIds.has(route.gtfsId)) {
-        // Temporarily subscribe to MQTT to see vehicles
-        tempMqttRouteIds.current.add(route.gtfsId);
-        mqttService.subscribeToRoute(route.gtfsId);
-        mqttService.addActiveRoute(route.gtfsId);
-      }
+      ensureTemporaryRouteSubscription(route);
 
       setSelectedRouteId(route.gtfsId);
       setActivatedRoute(route);
+      showSheetTab('routes');
     },
-    [clearSelectedStop, cleanupTempSubscriptions],
+    [clearSelectedStop, cleanupTempSubscriptions, clearSheetHistory, ensureTemporaryRouteSubscription, showSheetTab],
   );
 
-  // Handle route activation from StopPopover — keeps the stop selected so StopDetails stays visible
+  // Handle route activation from a stop — keeps the stop selected so users can navigate back to it.
   const handleActivateRouteFromStop = useCallback(
-    (route: Route) => {
+    (route: Route, options?: SheetNavigationOptions) => {
+      if (!options?.preserveHistory) clearSheetHistory();
       setSelectedVehicleId(null);
-      // Don't clear stop or temp subscriptions — keep stop context in bottom sheet
 
-      const permanentIds = new Set(useSubscriptionStore.getState().subscribedRoutes.map((r) => r.gtfsId));
-      if (!permanentIds.has(route.gtfsId)) {
-        tempMqttRouteIds.current.add(route.gtfsId);
-        mqttService.subscribeToRoute(route.gtfsId);
-        mqttService.addActiveRoute(route.gtfsId);
-      }
+      ensureTemporaryRouteSubscription(route);
 
       setSelectedRouteId(route.gtfsId);
       setActivatedRoute(route);
+      showSheetTab('routes');
     },
-    [],
+    [clearSheetHistory, ensureTemporaryRouteSubscription, showSheetTab],
   );
 
   // Helper to clear route selection state and clean up temp subscriptions
@@ -358,7 +431,24 @@ const App = () => {
     }
   }, [cleanupTempSubscriptions]);
 
-  // Handle subscribe from vehicle card or popover
+  const handleVehicleSelect = useCallback((vehicleId: string | null) => {
+    clearSheetHistory();
+    setSelectedVehicleId(vehicleId);
+    if (vehicleId) {
+      showSheetTab('vehicles');
+    }
+  }, [clearSheetHistory, showSheetTab]);
+
+  const handleVehicleListClick = useCallback((vehicle: TrackedVehicle) => {
+    clearSheetHistory();
+    clearRouteSelection(null);
+    clearSelectedStop();
+    cleanupTempSubscriptions();
+    setSelectedVehicleId(vehicle.vehicleId);
+    showSheetTab('vehicles');
+  }, [clearRouteSelection, clearSelectedStop, cleanupTempSubscriptions, clearSheetHistory, showSheetTab]);
+
+  // Handle subscribe from vehicle card or details
   const handleSubscribeFromVehicle = useCallback(
     (vehicle: TrackedVehicle) => {
       const route: Route = {
@@ -393,10 +483,18 @@ const App = () => {
     [unsubscribeFromRoute]
   );
 
+  const handleClearSelectedEntity = useCallback(() => {
+    clearSheetHistory();
+    setSelectedVehicleId(null);
+    clearRouteSelection(null);
+    clearSelectedStop();
+  }, [clearRouteSelection, clearSelectedStop, clearSheetHistory]);
+
   // Handle locate me
   const handleLocateMe = useCallback(async () => {
     try {
-      // Close any open popovers
+      // Close any open detail subviews
+      clearSheetHistory();
       setSelectedVehicleId(null);
       clearRouteSelection(null);
       clearSelectedStop();
@@ -406,11 +504,12 @@ const App = () => {
     } catch (error) {
       console.error('Failed to get location:', error);
     }
-  }, [flyToUserLocation, clearSelectedStop, cleanupTempSubscriptions]);
+  }, [flyToUserLocation, clearRouteSelection, clearSelectedStop, cleanupTempSubscriptions, clearSheetHistory]);
 
   // Handle stop click from list or map
   const handleStopClick = useCallback(
     (stop: Stop) => {
+      clearSheetHistory();
       // Save scroll position before switching to StopDetails
       if (sheetContentRef.current) {
         stopListScrollRef.current = sheetContentRef.current.scrollTop;
@@ -426,11 +525,7 @@ const App = () => {
         clearSelectedStop();
       } else {
         selectStop(stop);
-        // Switch to stops tab, scroll to top, and fly to the stop
-        switchTab('stops');
-        if (sheetContentRef.current) {
-          sheetContentRef.current.scrollTop = 0;
-        }
+        showSheetTab('stops');
         const { flyToLocation } = useLocationStore.getState();
         flyToLocation(stop.lat, stop.lon, 13);
 
@@ -445,35 +540,70 @@ const App = () => {
         }
       }
     },
-    [selectedStop, selectStop, clearSelectedStop, switchTab, cleanupTempSubscriptions],
+    [selectedStop, selectStop, clearRouteSelection, clearSelectedStop, clearSheetHistory, showSheetTab, cleanupTempSubscriptions],
   );
 
-  // Navigate back to the stop the user came from when they activated a route from StopPopover
-  const handleBackToStop = useCallback(() => {
-    // Clear route selection but keep the stop selected
+  const restoreSelectedStopContext = useCallback(() => {
+    cleanupTempSubscriptions();
+    showSheetTab('stops');
+
+    const stop = useStopStore.getState().selectedStop;
+    if (!stop) return;
+
+    const { flyToLocation } = useLocationStore.getState();
+    flyToLocation(stop.lat, stop.lon, 14);
+
+    for (const route of stop.routes) {
+      ensureTemporaryRouteSubscription(route);
+    }
+  }, [cleanupTempSubscriptions, ensureTemporaryRouteSubscription, showSheetTab]);
+
+  const restorePreviousSheetView = useCallback(() => {
+    const previous = sheetHistoryRef.current.pop();
+    if (!previous) return false;
+
+    if (previous.tab === 'stops') {
+      setSelectedVehicleId(null);
+      setSelectedRouteId(null);
+      setActivatedRoute(null);
+      restoreSelectedStopContext();
+      return true;
+    }
+
+    if (previous.tab === 'routes') {
+      setSelectedVehicleId(null);
+      if (previous.route) {
+        ensureTemporaryRouteSubscription(previous.route);
+      }
+      setSelectedRouteId(previous.routeId);
+      setActivatedRoute(previous.route);
+      showSheetTab('routes');
+      return true;
+    }
+
     setSelectedRouteId(null);
     setActivatedRoute(null);
-    cleanupTempSubscriptions();
-
-    // Fly back to the stop and re-subscribe to its routes for MQTT vehicles
-    const stop = useStopStore.getState().selectedStop;
-    if (stop) {
-      const { flyToLocation } = useLocationStore.getState();
-      flyToLocation(stop.lat, stop.lon, 14);
-
-      const permanentIds = new Set(useSubscriptionStore.getState().subscribedRoutes.map((r) => r.gtfsId));
-      for (const route of stop.routes) {
-        if (!permanentIds.has(route.gtfsId)) {
-          tempMqttRouteIds.current.add(route.gtfsId);
-          mqttService.subscribeToRoute(route.gtfsId);
-          mqttService.addActiveRoute(route.gtfsId);
-        }
-      }
+    if (!selectedStop) {
+      cleanupTempSubscriptions();
     }
-  }, [cleanupTempSubscriptions]);
+    setSelectedVehicleId(previous.vehicleId);
+    showSheetTab('vehicles');
+    return true;
+  }, [cleanupTempSubscriptions, ensureTemporaryRouteSubscription, restoreSelectedStopContext, selectedStop, showSheetTab]);
+
+  // Navigate back to the selected stop from a vehicle or route detail subview.
+  const handleBackToStop = useCallback(() => {
+    setSelectedVehicleId(null);
+    setSelectedRouteId(null);
+    setActivatedRoute(null);
+    restoreSelectedStopContext();
+  }, [restoreSelectedStopContext]);
 
   // Handle back from stop details
   const handleStopBack = useCallback(() => {
+    if (restorePreviousSheetView()) return;
+
+    clearSheetHistory();
     cleanupTempSubscriptions();
     clearSelectedStop();
     // Restore scroll position after NearbyStops re-mounts
@@ -482,16 +612,17 @@ const App = () => {
         sheetContentRef.current.scrollTop = stopListScrollRef.current;
       }
     });
-  }, [clearSelectedStop, cleanupTempSubscriptions]);
+  }, [clearSelectedStop, cleanupTempSubscriptions, clearSheetHistory, restorePreviousSheetView]);
 
   // Handle deselecting a vehicle while a stop remains selected
   const handleVehicleDeselect = useCallback(() => {
     setSelectedVehicleId(null);
     if (selectedStop) {
+      showSheetTab('stops');
       const { flyToLocation } = useLocationStore.getState();
       flyToLocation(selectedStop.lat, selectedStop.lon, 14);
     }
-  }, [selectedStop]);
+  }, [selectedStop, showSheetTab]);
 
   // Handle clicking a timetable departure to find and select matching vehicle
   const handleDepartureClick = useCallback(
@@ -513,10 +644,12 @@ const App = () => {
       }
 
       if (bestMatch) {
+        pushCurrentSheetView();
         setSelectedVehicleId(bestMatch.vehicleId);
         // Only clear route UI state — don't cleanup temp subscriptions since the stop is still active
         setSelectedRouteId(null);
         setActivatedRoute(null);
+        showSheetTab('vehicles');
         const { flyToLocation } = useLocationStore.getState();
         flyToLocation(bestMatch.lat, bestMatch.lng, VEHICLE_FLY_TO_ZOOM);
       } else {
@@ -524,7 +657,7 @@ const App = () => {
         handleVehicleDeselect();
       }
     },
-    [handleVehicleDeselect],
+    [handleVehicleDeselect, pushCurrentSheetView, showSheetTab],
   );
 
   // Close nearby menu when clicking outside, and keep position up-to-date while open
@@ -662,16 +795,139 @@ const App = () => {
   }, [subscribedRoutes, selectedVehicleRouteId, selectedRouteId, selectedStopRouteIds, nearbyRouteIds]);
   const { data: patterns } = useRoutePatterns(routeIds);
 
+  const selectedRoute = useMemo((): Route | SubscribedRoute | null => {
+    if (!selectedRouteId) return null;
+
+    const subscribed = subscribedRoutes.find((route) => route.gtfsId === selectedRouteId);
+    if (subscribed) return subscribed;
+
+    if (nearbyStopsForUi) {
+      for (const stop of nearbyStopsForUi) {
+        const stopRoute = stop.routes.find((route) => route.gtfsId === selectedRouteId);
+        if (stopRoute) return { ...stopRoute };
+      }
+    }
+
+    const vehicle = vehicles.find((v) => `HSL:${v.routeId}` === selectedRouteId);
+    if (vehicle) {
+      return {
+        gtfsId: selectedRouteId,
+        shortName: vehicle.routeShortName,
+        longName: vehicle.headsign,
+        mode: vehicle.mode,
+      };
+    }
+
+    if (activatedRoute?.gtfsId === selectedRouteId) {
+      return activatedRoute;
+    }
+
+    return null;
+  }, [selectedRouteId, subscribedRoutes, nearbyStopsForUi, vehicles, activatedRoute]);
+
+  const selectedRoutePatterns = selectedRouteId ? patterns?.get(selectedRouteId) : undefined;
+  const isSelectedRouteSubscribed = selectedRouteId
+    ? subscribedRoutes.some((route) => route.gtfsId === selectedRouteId)
+    : false;
+
+  const handleMapRouteActivate = useCallback(
+    (route: Route) => {
+      if (selectedStop) {
+        handleActivateRouteFromStop(route);
+      } else {
+        handleActivateRoute(route);
+      }
+    },
+    [selectedStop, handleActivateRouteFromStop, handleActivateRoute],
+  );
+
+  const handleVehicleRouteActivate = useCallback(
+    (route: Route) => {
+      pushCurrentSheetView();
+      if (selectedStop) {
+        handleActivateRouteFromStop(route, { preserveHistory: true });
+      } else {
+        handleActivateRoute(route, { preserveHistory: true });
+      }
+    },
+    [selectedStop, pushCurrentSheetView, handleActivateRouteFromStop, handleActivateRoute],
+  );
+
+  const handleStopRouteActivate = useCallback(
+    (route: Route) => {
+      pushCurrentSheetView();
+      handleActivateRouteFromStop(route, { preserveHistory: true });
+    },
+    [pushCurrentSheetView, handleActivateRouteFromStop],
+  );
+
+  const handleVehicleDetailsBack = useCallback(() => {
+    if (restorePreviousSheetView()) return;
+
+    if (selectedStop) {
+      handleBackToStop();
+    } else {
+      setSelectedVehicleId(null);
+    }
+  }, [selectedStop, handleBackToStop, restorePreviousSheetView]);
+
+  const handleRouteDetailsBack = useCallback(() => {
+    if (restorePreviousSheetView()) return;
+
+    if (selectedStop) {
+      handleBackToStop();
+    } else {
+      clearRouteSelection(null);
+    }
+  }, [selectedStop, handleBackToStop, clearRouteSelection, restorePreviousSheetView]);
+
+  const handleSelectedVehicleSubscribe = useCallback(() => {
+    if (selectedVehicle) {
+      handleSubscribeFromVehicle(selectedVehicle);
+    }
+  }, [selectedVehicle, handleSubscribeFromVehicle]);
+
+  const handleSelectedVehicleUnsubscribe = useCallback(() => {
+    if (selectedVehicle) {
+      handleUnsubscribe(`HSL:${selectedVehicle.routeId}`);
+    }
+  }, [selectedVehicle, handleUnsubscribe]);
+
+  const handleSelectedRouteSubscribe = useCallback(() => {
+    if (selectedRoute) {
+      handleSubscribeRoute(selectedRoute);
+    }
+  }, [selectedRoute, handleSubscribeRoute]);
+
+  const handleSelectedRouteUnsubscribe = useCallback(() => {
+    if (selectedRouteId) {
+      handleUnsubscribe(selectedRouteId);
+    }
+  }, [selectedRouteId, handleUnsubscribe]);
+
+  const handleRouteVehicleSelect = useCallback((vehicle: TrackedVehicle) => {
+    pushCurrentSheetView();
+    if (selectedStop) {
+      setSelectedRouteId(null);
+      setActivatedRoute(null);
+    } else {
+      clearRouteSelection(null);
+    }
+    setSelectedVehicleId(vehicle.vehicleId);
+    showSheetTab('vehicles');
+
+    const { flyToLocation } = useLocationStore.getState();
+    flyToLocation(vehicle.lat, vehicle.lng, VEHICLE_FLY_TO_ZOOM);
+  }, [selectedStop, clearRouteSelection, pushCurrentSheetView, showSheetTab]);
+
   return (
     <div className="h-full w-full relative bg-gray-100 dark:bg-gray-950">
       {/* Map */}
       <BusMap
         patterns={patterns}
-        onSubscribe={handleSubscribeRoute}
-        onUnsubscribe={handleUnsubscribe}
         nearbyRadius={anyNearbyActive ? nearbyRadius : undefined}
         selectedVehicleId={selectedVehicleId}
-        onVehicleSelect={setSelectedVehicleId}
+        onVehicleSelect={handleVehicleSelect}
         selectedRouteId={selectedRouteId}
         activatedRoute={activatedRoute}
         onRouteSelect={clearRouteSelection}
@@ -679,10 +935,10 @@ const App = () => {
         nearbyStops={nearbyStopsWithinRadius}
         onStopClick={handleStopClick}
         onStopDeselect={handleStopBack}
-        onVehicleDeselect={handleVehicleDeselect}
-        onRouteActivate={handleActivateRouteFromStop}
-        onBackToStop={selectedStop ? handleBackToStop : undefined}
+        onRouteActivate={handleMapRouteActivate}
         nearbyRouteIds={nearbyRouteIds}
+        onCameraActionsChange={setMapCameraActions}
+        onCameraStateChange={setMapCameraState}
       />
 
       {/* Status bar with search */}
@@ -718,6 +974,7 @@ const App = () => {
           sheetPersistTimeoutRef.current = setTimeout(() => setPersistedSheetHeight(h), 300);
         }}
         onExpand={(expand) => { expandSheetRef.current = expand; }}
+        onClose={handleClearSelectedEntity}
         contentRef={sheetContentRef}
         header={
           <div className="flex items-center gap-2 mb-3 pt-1">
@@ -728,7 +985,10 @@ const App = () => {
                     ? 'bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300'
                     : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
                 }`}
-                onClick={() => switchTab('vehicles')}
+                onClick={() => {
+                  clearSheetHistory();
+                  switchTab('vehicles');
+                }}
               >
                 Vehicles
               </button>
@@ -738,7 +998,10 @@ const App = () => {
                     ? 'bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300'
                     : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
                 }`}
-                onClick={() => switchTab('routes')}
+                onClick={() => {
+                  clearSheetHistory();
+                  switchTab('routes');
+                }}
               >
                 Routes
               </button>
@@ -748,7 +1011,10 @@ const App = () => {
                     ? 'bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300'
                     : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
                 }`}
-                onClick={() => switchTab('stops')}
+                onClick={() => {
+                  clearSheetHistory();
+                  switchTab('stops');
+                }}
               >
                 Stops
               </button>
@@ -812,86 +1078,111 @@ const App = () => {
           </div>
         }
       >
-        <div className="pb-8 pt-0.5">
+        <div className="pb-16 pt-0.5">
           {/* Tab content */}
           {activeTab === 'vehicles' ? (
-            <VehicleList
-              selectedVehicleId={selectedVehicleId}
-              onVehicleClick={(v) => {
-                clearRouteSelection(null);
-                clearSelectedStop();
-                cleanupTempSubscriptions();
-                setSelectedVehicleId(v.vehicleId);
-              }}
-              onSubscribe={handleSubscribeFromVehicle}
-              onUnsubscribe={handleUnsubscribe}
-            />
-          ) : activeTab === 'routes' ? (
-            <>
-              <RoutesList
-                routes={sortedSubscribedRoutes}
-                patterns={patterns}
-                onUnsubscribe={handleUnsubscribe}
-                onRouteClick={(route) => {
-                  setSelectedVehicleId(null);
-                  clearSelectedStop();
-                  cleanupTempSubscriptions();
-                  setSelectedRouteId(route.gtfsId);
-                  setActivatedRoute(route);
-                }}
-                selectedRouteId={selectedRouteId}
-                hasNearbyRoutes={nearbyRoutes.length > 0}
+            selectedVehicle ? (
+              <VehicleDetails
+                vehicle={selectedVehicle}
+                onBack={handleVehicleDetailsBack}
+                onSubscribe={handleSelectedVehicleSubscribe}
+                onUnsubscribe={handleSelectedVehicleUnsubscribe}
+                isFollowing={mapCameraState.isFollowingVehicle}
+                onReFollow={mapCameraActions?.refollowVehicle}
+                onRouteActivate={handleVehicleRouteActivate}
+                backTitle={selectedStop ? 'Back to stop' : 'Back to vehicles'}
               />
-              {showNearbyRoutes && nearbyRoutes.length > 0 && (
-                <div className="mt-4">
-                  <h3 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2 px-1">Nearby Routes</h3>
-                  <div className="space-y-2 px-0.5">
-                    {nearbyRoutes.map((route) => {
-                      const color = resolveRouteColor({
-                        routeId: route.gtfsId,
-                        mode: route.mode ?? 'bus',
-                        colorMode: routeColorMode,
-                        isSubscribed: false,
-                      });
-                      const isActive = selectedRouteId === route.gtfsId;
-                      return (
-                        <div
-                          key={route.gtfsId}
-                          className={`bg-gray-50 dark:bg-gray-800 rounded-xl p-2 min-[425px]:p-3 flex items-center gap-3 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors ${isActive ? 'outline outline-2 outline-primary-500' : ''}`}
-                          onClick={() => handleActivateRoute(route)}
-                        >
+            ) : (
+              <VehicleList
+                selectedVehicleId={selectedVehicleId}
+                onVehicleClick={handleVehicleListClick}
+                onSubscribe={handleSubscribeFromVehicle}
+                onUnsubscribe={handleUnsubscribe}
+              />
+            )
+          ) : activeTab === 'routes' ? (
+            selectedRoute ? (
+              <RouteDetails
+                route={selectedRoute}
+                isSubscribed={isSelectedRouteSubscribed}
+                patterns={selectedRoutePatterns}
+                vehicles={vehicles}
+                onBack={handleRouteDetailsBack}
+                onSubscribe={handleSelectedRouteSubscribe}
+                onUnsubscribe={handleSelectedRouteUnsubscribe}
+                onReCenter={mapCameraState.hasMovedFromRoute ? mapCameraActions?.recenterRoute : undefined}
+                onVehicleSelect={handleRouteVehicleSelect}
+                backTitle={selectedStop ? 'Back to stop' : 'Back to routes'}
+              />
+            ) : (
+              <>
+                <RoutesList
+                  routes={sortedSubscribedRoutes}
+                  onUnsubscribe={handleUnsubscribe}
+                  onRouteClick={(route) => {
+                    clearSheetHistory();
+                    setSelectedVehicleId(null);
+                    clearSelectedStop();
+                    cleanupTempSubscriptions();
+                    setSelectedRouteId(route.gtfsId);
+                    setActivatedRoute(route);
+                    showSheetTab('routes');
+                  }}
+                  selectedRouteId={selectedRouteId}
+                  hasNearbyRoutes={nearbyRoutes.length > 0}
+                />
+                {showNearbyRoutes && nearbyRoutes.length > 0 && (
+                  <div className="mt-4">
+                    <h3 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2 px-1">Nearby Routes</h3>
+                    <div className="space-y-2 px-0.5">
+                      {nearbyRoutes.map((route) => {
+                        const color = resolveRouteColor({
+                          routeId: route.gtfsId,
+                          mode: route.mode ?? 'bus',
+                          colorMode: routeColorMode,
+                          isSubscribed: false,
+                        });
+                        const isActive = selectedRouteId === route.gtfsId;
+                        return (
                           <div
-                            className="w-10 h-10 min-[425px]:w-12 min-[425px]:h-12 rounded-xl flex items-center justify-center text-white font-bold text-sm shrink-0"
-                            style={{ backgroundColor: color }}
+                            key={route.gtfsId}
+                            className={`bg-gray-50 dark:bg-gray-800 rounded-xl p-2 min-[425px]:p-3 flex items-center gap-3 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors ${isActive ? 'outline outline-2 outline-primary-500' : ''}`}
+                            onClick={() => handleActivateRoute(route)}
                           >
-                            {route.shortName}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="font-medium text-gray-900 dark:text-white truncate">
-                              {route.longName}
+                            <div
+                              className="w-10 h-10 min-[425px]:w-12 min-[425px]:h-12 rounded-xl flex items-center justify-center text-white font-bold text-sm shrink-0"
+                              style={{ backgroundColor: color }}
+                            >
+                              {route.shortName}
                             </div>
-                            <div className="text-xs text-gray-500 dark:text-gray-400 capitalize">
-                              {route.mode}
+                            <div className="flex-1 min-w-0">
+                              <div className="font-medium text-gray-900 dark:text-white truncate">
+                                {route.longName}
+                              </div>
+                              <div className="text-xs text-gray-500 dark:text-gray-400 capitalize">
+                                {route.mode}
+                              </div>
                             </div>
+                            <StarToggleButton
+                              active={subscribedRoutes.some((r) => r.gtfsId === route.gtfsId)}
+                              onToggle={() => handleSelectRoute(route)}
+                              title={subscribedRoutes.some((r) => r.gtfsId === route.gtfsId) ? 'Remove route' : 'Track this route'}
+                            />
                           </div>
-                          <StarToggleButton
-                            active={subscribedRoutes.some((r) => r.gtfsId === route.gtfsId)}
-                            onToggle={() => handleSelectRoute(route)}
-                            title={subscribedRoutes.some((r) => r.gtfsId === route.gtfsId) ? 'Remove route' : 'Track this route'}
-                          />
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
-              )}
-            </>
+                )}
+              </>
+            )
           ) : selectedStop ? (
             <StopDetails
               stop={selectedStop}
               onBack={handleStopBack}
               onDepartureClick={handleDepartureClick}
-              onVehicleDeselect={handleVehicleDeselect}
+              onReCenter={mapCameraState.hasMovedFromStop ? mapCameraActions?.recenterStop : undefined}
+              onRouteActivate={handleStopRouteActivate}
             />
           ) : (
             <NearbyStops
@@ -915,14 +1206,13 @@ const App = () => {
 // Routes list component for bottom sheet tab
 interface RoutesListProps {
   routes: SubscribedRoute[];
-  patterns?: Map<string, RoutePattern[]>;
   onUnsubscribe: (gtfsId: string) => void;
   onRouteClick?: (route: SubscribedRoute) => void;
   selectedRouteId?: string | null;
   hasNearbyRoutes?: boolean;
 }
 
-const RoutesList = ({ routes, patterns, onUnsubscribe, onRouteClick, selectedRouteId, hasNearbyRoutes }: RoutesListProps) => {
+const RoutesList = ({ routes, onUnsubscribe, onRouteClick, selectedRouteId, hasNearbyRoutes }: RoutesListProps) => {
   const routeColorMode = useSettingsStore((state) => state.routeColorMode);
 
   if (routes.length === 0 && !hasNearbyRoutes) {
@@ -947,7 +1237,7 @@ const RoutesList = ({ routes, patterns, onUnsubscribe, onRouteClick, selectedRou
   }
 
   return (
-    <div className="space-y-2 px-0.5 py-0.5">
+    <div className="space-y-2 px-0.5">
       <AnimatePresence mode="popLayout" initial={false}>
         {routes.map((route) => {
           const color = resolveRouteColor({
@@ -957,8 +1247,6 @@ const RoutesList = ({ routes, patterns, onUnsubscribe, onRouteClick, selectedRou
             isSubscribed: true,
           });
           const isSelected = selectedRouteId === route.gtfsId;
-          const routePatterns = patterns?.get(route.gtfsId);
-          const vehicleCount = routePatterns?.reduce((acc, p) => acc + (p.geometry.length > 0 ? 1 : 0), 0) || 0;
           return (
             <motion.div
               key={route.gtfsId}
@@ -979,8 +1267,8 @@ const RoutesList = ({ routes, patterns, onUnsubscribe, onRouteClick, selectedRou
                 <div className="font-medium text-gray-900 dark:text-white truncate">
                   {route.longName}
                 </div>
-                <div className="text-xs text-gray-500 dark:text-gray-400 capitalize">
-                  {route.mode} {vehicleCount > 0 && `• ${vehicleCount} direction${vehicleCount > 1 ? 's' : ''}`}
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-gray-500 dark:text-gray-400 capitalize">{route.mode}</span>
                 </div>
               </div>
               <StarToggleButton

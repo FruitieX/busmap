@@ -1,4 +1,4 @@
-import { memo, useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { memo, useState, useCallback, useRef, useEffect, useMemo, type CSSProperties } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useVehicleStore, useSubscriptionStore, useSubscribedStopStore, useSettingsStore } from '@/stores';
 import { useRoutes, getStopTermini, normalizeMode, resolveRouteColor } from '@/lib';
@@ -32,6 +32,38 @@ const MODE_LABELS: Record<TransportMode, string> = {
 };
 
 type SearchFilter = TransportMode | 'stops';
+
+interface FilterChipProps {
+  active: boolean;
+  color: string;
+  label: string;
+  onClick: () => void;
+}
+
+const getActiveFilterStyle = (color: string): CSSProperties => ({
+  backgroundColor: `${color}14`,
+  borderColor: `${color}80`,
+  boxShadow: `inset 0 0 0 1px ${color}2e, 0 1px 2px rgba(15, 23, 42, 0.08)`,
+});
+
+const FilterChip = ({ active, color, label, onClick }: FilterChipProps) => (
+  <button
+    className={`inline-flex h-8 shrink-0 items-center gap-2 rounded-full border px-3 text-sm font-medium whitespace-nowrap transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-900 ${
+      active
+        ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-800 dark:text-white'
+        : 'border-gray-200/70 bg-gray-100/80 text-gray-500 hover:border-gray-300 hover:bg-gray-200/80 hover:text-gray-700 dark:border-gray-700/70 dark:bg-gray-800/70 dark:text-gray-400 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-200'
+    }`}
+    style={active ? getActiveFilterStyle(color) : undefined}
+    onMouseDown={(e) => e.preventDefault()}
+    onClick={onClick}
+  >
+    <span
+      className={`h-2 w-2 rounded-full transition-opacity ${active ? 'opacity-100' : 'opacity-45'}`}
+      style={{ backgroundColor: color }}
+    />
+    {label}
+  </button>
+);
 
 const DEFAULT_FILTERS = new Set<SearchFilter>([...MODE_ORDER.filter((m) => m !== 'ferry'), 'stops']);
 
@@ -486,33 +518,21 @@ const StatusBarComponent = ({ onActivateRoute, onToggleRouteSubscription, nearby
                 className="mt-2 pt-2 border-t border-gray-200 dark:border-gray-700 overflow-hidden"
               >
                 {/* Filter chips — multi-select, all active by default */}
-                <div className="flex gap-1 mb-2 overflow-x-auto scrollbar-thin pb-1">
-                  <button
-                    className={`px-2.5 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
-                      showStops
-                        ? 'text-white'
-                        : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
-                    }`}
-                    style={showStops ? { backgroundColor: STOP_FILTER_COLOR } : {}}
-                    onMouseDown={(e) => e.preventDefault()}
+                <div className="flex gap-1.5 mb-2 overflow-x-auto scrollbar-thin pb-1">
+                  <FilterChip
+                    active={showStops}
+                    color={STOP_FILTER_COLOR}
+                    label="Stops"
                     onClick={() => toggleFilter('stops')}
-                  >
-                    Stops
-                  </button>
+                  />
                   {availableModes.map((mode) => (
-                    <button
+                    <FilterChip
                       key={mode}
-                      className={`px-2.5 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
-                        activeFilters.has(mode)
-                          ? 'text-white'
-                          : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
-                      }`}
-                      style={activeFilters.has(mode) ? { backgroundColor: TRANSPORT_COLORS[mode] } : {}}
-                      onMouseDown={(e) => e.preventDefault()}
+                      active={activeFilters.has(mode)}
+                      color={TRANSPORT_COLORS[mode]}
+                      label={MODE_LABELS[mode]}
                       onClick={() => toggleFilter(mode)}
-                    >
-                      {MODE_LABELS[mode]}
-                    </button>
+                    />
                   ))}
                 </div>
 

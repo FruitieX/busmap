@@ -130,7 +130,7 @@ export const BottomSheet = ({
         {/* Fixed header */}
         {header && <div className="shrink-0">{header}</div>}
         {/* Scrollable content */}
-        <div ref={contentRef} className="flex-1 overflow-y-auto scrollbar-thin min-h-0 relative">{children}</div>
+        <div ref={contentRef} className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin min-h-0 relative">{children}</div>
       </div>
     </motion.div>
   );

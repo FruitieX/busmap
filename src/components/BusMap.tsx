@@ -1,14 +1,9 @@
 import { useRef, useCallback, useMemo, memo, useEffect, useState } from 'react';
 import Map, { Marker, Source, Layer, AttributionControl } from 'react-map-gl/maplibre';
 import type { LineLayerSpecification, CircleLayerSpecification, SymbolLayerSpecification, MapRef, ViewStateChangeEvent, MapLayerMouseEvent } from 'react-map-gl/maplibre';
-import { AnimatePresence } from 'framer-motion';
 import { useLocationStore, useVehicleStore, useSubscriptionStore, useSettingsStore, useStopStore, useSubscribedStopStore } from '@/stores';
-import { useAnimatedPosition } from './VehicleMarker';
 import { extrapolate, interpolateVehicle, pruneInterpolationStates } from '@/lib/interpolation';
 import { getVehicleTerminusLabel, resolveRouteColor } from '@/lib';
-import { VehiclePopover } from './VehiclePopover';
-import { RoutePopover } from './RoutePopover';
-import { StopPopover } from './StopPopover';
 import type { TrackedVehicle, RoutePattern, Route, Stop } from '@/types';
 import { TRANSPORT_COLORS } from '@/types';
 import type { FeatureCollection, LineString, Polygon, Point, Feature } from 'geojson';
@@ -98,9 +93,6 @@ interface SelectionAnimState { selected: boolean; startTime: number }
 const selectionAnimState: Record<string, SelectionAnimState> = {};
 const SELECTION_ANIM_DURATION_MS = 200; // Duration of selection scale animation
 
-// Popover height based on screen width (matches Tailwind sm: breakpoint at 640px)
-const getPopoverHeight = (screenWidth: number) => screenWidth < 640 ? 170 : 200;
-
 // Compute bounding box from route patterns
 const computeRouteBounds = (routePatterns: RoutePattern[]): [[number, number], [number, number]] | null => {
   let minLng = Infinity, maxLng = -Infinity;
@@ -119,11 +111,30 @@ const computeRouteBounds = (routePatterns: RoutePattern[]): [[number, number], [
   return [[minLng, minLat], [maxLng, maxLat]];
 };
 
+const resetCameraPadding = (map: ReturnType<MapRef['getMap']>) => {
+  const padding = map.getPadding();
+  if (padding.top === 0 && padding.bottom === 0 && padding.left === 0 && padding.right === 0) return;
+
+  map.setPadding({ top: 0, bottom: 0, left: 0, right: 0 });
+};
+
+const ROUTE_FIT_BOTTOM_MARGIN = 24;
+
+interface BusMapCameraActions {
+  refollowVehicle: () => void;
+  recenterRoute: () => void;
+  recenterStop: () => void;
+}
+
+interface BusMapCameraState {
+  isFollowingVehicle: boolean;
+  hasMovedFromRoute: boolean;
+  hasMovedFromStop: boolean;
+}
+
 interface BusMapProps {
   patterns?: Map<string, RoutePattern[]>;
   onVehicleClick?: (vehicle: TrackedVehicle) => void;
-  onSubscribe?: (route: Route) => void;
-  onUnsubscribe?: (gtfsId: string) => void;
   nearbyRadius?: number; // in meters, shown as overlay when defined
   selectedVehicleId?: string | null;
   onVehicleSelect?: (vehicleId: string | null) => void;
@@ -134,10 +145,10 @@ interface BusMapProps {
   nearbyStops?: Array<Stop & { distance: number }>;
   onStopClick?: (stop: Stop) => void;
   onStopDeselect?: () => void;
-  onVehicleDeselect?: () => void;
   onRouteActivate?: (route: Route) => void;
-  onBackToStop?: () => void;
   nearbyRouteIds?: string[];
+  onCameraActionsChange?: (actions: BusMapCameraActions | null) => void;
+  onCameraStateChange?: (state: BusMapCameraState) => void;
 }
 
 const routeLineStyle: LineLayerSpecification = {
@@ -237,6 +248,7 @@ interface VehicleFeatureProps {
   markerImage: string;
   iconSize: number;
   opacity: number;
+  isDimmed: boolean;
   heading: number;
   isSubscribed: boolean;
   isSelected: boolean;
@@ -260,6 +272,44 @@ interface VehicleTerminusFeatureProps {
   terminusOffsetEm: number;
 }
 
+interface RouteLineFeatureProps {
+  routeId: string;
+  color: string;
+  isSelected: boolean;
+  opacity: number;
+  isDimmed: boolean;
+  sortKey: number;
+}
+
+interface StopFeatureProps {
+  gtfsId: string;
+  name: string;
+  code: string;
+  vehicleMode: string;
+  isSelected: boolean;
+  opacity: number;
+  isDimmed: boolean;
+  color: string;
+}
+
+type RenderedMapFeature = NonNullable<MapLayerMouseEvent['features']>[number];
+
+const isDimmedFeature = (feature: RenderedMapFeature) => {
+  const isDimmed = feature.properties?.isDimmed;
+  return isDimmed === true || isDimmed === 'true' || isDimmed === 1;
+};
+
+const stopServesRoute = (stop: Stop, routeId: string) => stop.routes.some((route) => route.gtfsId === routeId);
+
+const stopServesAnyRoute = (stop: Stop, routeIds: Set<string>) => stop.routes.some((route) => routeIds.has(route.gtfsId));
+
+const stopServesVehicleDirection = (stop: Stop, routeId: string, gtfsDirection: number) => {
+  if (!stopServesRoute(stop, routeId)) return false;
+
+  const routeDirections = stop.routeDirections?.[routeId];
+  return !routeDirections || routeDirections.includes(gtfsDirection);
+};
+
 // Generate a GeoJSON circle polygon (for flat rendering on 3D tilted maps)
 const createCirclePolygon = (lng: number, lat: number, radiusMeters: number, points = 32): Polygon => {
   const coords: [number, number][] = [];
@@ -281,41 +331,7 @@ const createCirclePolygon = (lng: number, lat: number, radiusMeters: number, poi
   };
 };
 
-// Popover wrapper component that tracks animated position.
-// Keyed by vehicleId so hooks reset on vehicle change.
-const SelectedVehiclePopover = memo(({ vehicle, onClose, onSubscribe, onUnsubscribe, isFollowing, onReFollow }: {
-  vehicle: TrackedVehicle;
-  onClose: () => void;
-  onSubscribe: () => void;
-  onUnsubscribe: () => void;
-  isFollowing: boolean;
-  onReFollow: () => void;
-}) => {
-  const pos = useAnimatedPosition(vehicle);
-  const markerSizeLevel = useSettingsStore((state) => state.markerSizeLevel);
-  const markerSizeScale = getMarkerSizeScale(markerSizeLevel);
-  return (
-    <Marker
-      longitude={pos.lng}
-      latitude={pos.lat}
-      anchor="bottom"
-      offset={[0, -Math.round(25 * markerSizeScale)]}
-      style={{ zIndex: 10 }}
-    >
-      <VehiclePopover
-        vehicle={vehicle}
-        onClose={onClose}
-        onSubscribe={onSubscribe}
-        onUnsubscribe={onUnsubscribe}
-        isFollowing={isFollowing}
-        onReFollow={onReFollow}
-      />
-    </Marker>
-  );
-});
-SelectedVehiclePopover.displayName = 'SelectedVehiclePopover';
-
-const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe, nearbyRadius, selectedVehicleId, onVehicleSelect, selectedRouteId, activatedRoute, onRouteSelect, bottomPadding = 200, nearbyStops, onStopClick, onStopDeselect, onVehicleDeselect, onRouteActivate, onBackToStop, nearbyRouteIds }: BusMapProps) => {
+const BusMapComponent = ({ patterns, onVehicleClick, nearbyRadius, selectedVehicleId, onVehicleSelect, selectedRouteId, activatedRoute, onRouteSelect, bottomPadding = 200, nearbyStops, onStopClick, onStopDeselect, onRouteActivate, nearbyRouteIds, onCameraActionsChange, onCameraStateChange }: BusMapProps) => {
   const mapRef = useRef<MapRef>(null);
   const { viewport, setViewport, pendingFlyTo, consumePendingFlyTo } = useLocationStore();
   const userLocation = useLocationStore((state) => state.userLocation);
@@ -492,24 +508,29 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
         
         // Fade factor for vehicles outside the active map focus
         let routeFadeFactor = 1;
+        let isDimmed = false;
         if (currentSelectedId) {
           if (vehicle.vehicleId !== currentSelectedId) {
             routeFadeFactor = 0.1;
+            isDimmed = true;
           }
         } else if (currentSelectedRouteId) {
           const vehicleRouteId = `HSL:${vehicle.routeId}`;
           if (vehicleRouteId !== currentSelectedRouteId) {
             routeFadeFactor = 0.1; // Fade non-selected route vehicles
+            isDimmed = true;
           }
         } else if (currentStopRouteIds.size > 0) {
           const vehicleRouteId = `HSL:${vehicle.routeId}`;
           if (!currentStopRouteIds.has(vehicleRouteId)) {
             routeFadeFactor = 0.1; // Fade vehicles not on stop's routes
+            isDimmed = true;
           } else {
             // Check direction filtering (if timetable data has loaded)
             const allowedDirs = currentStopDirections[vehicleRouteId];
             if (allowedDirs && allowedDirs.length > 0 && !allowedDirs.includes(vehicle.direction)) {
               routeFadeFactor = 0.1; // Fade vehicles going in wrong direction
+              isDimmed = true;
             }
           }
         }
@@ -611,6 +632,7 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
             markerImage,
             iconSize,
             opacity,
+            isDimmed,
             heading,
             isSubscribed,
             isSelected,
@@ -650,6 +672,11 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
 
   // Whether the user has panned away from the fitted route bounds
   const [hasMovedFromRoute, setHasMovedFromRoute] = useState(false);
+  const [hasMovedFromStop, setHasMovedFromStop] = useState(false);
+
+  useEffect(() => {
+    setHasMovedFromStop(false);
+  }, [selectedStop?.gtfsId]);
 
   // Handle pending flyTo animations with padding for bottom sheet
   useEffect(() => {
@@ -748,7 +775,7 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
     return () => clearInterval(intervalId);
   }, [selectedVehicleId, bottomPadding]);
 
-  // Stop following on user-initiated pan/zoom (but keep popover open)
+  // Stop following on user-initiated pan/zoom while keeping the selection active.
   const handleMoveStart = useCallback(
     (evt: ViewStateChangeEvent) => {
       // Only react to user-initiated moves (has originalEvent) and not during programmatic tracking
@@ -759,9 +786,12 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
         if (selectedRouteId && !hasMovedFromRoute) {
           setHasMovedFromRoute(true);
         }
+        if (selectedStop && !hasMovedFromStop) {
+          setHasMovedFromStop(true);
+        }
       }
     },
-    [selectedVehicleId, selectedRouteId, hasMovedFromRoute]
+    [selectedVehicleId, selectedRouteId, selectedStop, hasMovedFromRoute, hasMovedFromStop]
   );
 
   const handleMove = useCallback(
@@ -787,10 +817,35 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
   );
 
   // Handle click on vehicle WebGL layer
+  const clearFocusedSelection = useCallback(() => {
+    if (selectedVehicleId) {
+      onVehicleSelect?.(null);
+      return;
+    }
+    if (selectedRouteId) {
+      onRouteSelect?.(null);
+      return;
+    }
+    if (selectedStop) {
+      onStopDeselect?.();
+    }
+  }, [selectedVehicleId, selectedRouteId, selectedStop, onVehicleSelect, onRouteSelect, onStopDeselect]);
+
+  const handleDimmedFeatureClick = useCallback(
+    (evt: MapLayerMouseEvent, feature: RenderedMapFeature) => {
+      if (!isDimmedFeature(feature)) return false;
+      evt.originalEvent.stopPropagation();
+      clearFocusedSelection();
+      return true;
+    },
+    [clearFocusedSelection],
+  );
+
   const handleVehicleLayerClick = useCallback(
     (evt: MapLayerMouseEvent) => {
       if (!evt.features || evt.features.length === 0) return;
       const feature = evt.features[0];
+      if (handleDimmedFeatureClick(evt, feature)) return;
       const vehicleId = feature.properties?.vehicleId;
       if (!vehicleId) return;
 
@@ -800,93 +855,8 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
         handleVehicleClick(vehicle);
       }
     },
-    [handleVehicleClick]
+    [handleVehicleClick, handleDimmedFeatureClick]
   );
-
-  const handlePopoverSubscribe = useCallback(() => {
-    if (!selectedVehicle) return;
-    const route: Route = {
-      gtfsId: `HSL:${selectedVehicle.routeId}`,
-      shortName: selectedVehicle.routeShortName,
-      longName: selectedVehicle.headsign,
-      mode: selectedVehicle.mode,
-    };
-    onSubscribe?.(route);
-  }, [selectedVehicle, onSubscribe]);
-
-  const handlePopoverUnsubscribe = useCallback(() => {
-    if (!selectedVehicle) return;
-    onUnsubscribe?.(`HSL:${selectedVehicle.routeId}`);
-  }, [selectedVehicle, onUnsubscribe]);
-
-  // Get selected route data (subscribed or from nearby stops / vehicles)
-  const selectedRoute = useMemo((): Route | null => {
-    if (!selectedRouteId) return null;
-    // Check subscribed routes first
-    const subscribed = subscribedRoutes.find((r) => r.gtfsId === selectedRouteId);
-    if (subscribed) return subscribed;
-    // Try to find from nearby stops
-    if (nearbyStops) {
-      for (const stop of nearbyStops) {
-        const stopRoute = stop.routes.find((r) => r.gtfsId === selectedRouteId);
-        if (stopRoute) return { ...stopRoute };
-      }
-    }
-    // Fall back to vehicle data
-    const vehicle = vehicles.find((v) => `HSL:${v.routeId}` === selectedRouteId);
-    if (vehicle) {
-      return {
-        gtfsId: selectedRouteId,
-        shortName: vehicle.routeShortName,
-        longName: vehicle.headsign,
-        mode: vehicle.mode,
-      };
-    }
-    // Fall back to activated route from search/list
-    if (activatedRoute && activatedRoute.gtfsId === selectedRouteId) {
-      return activatedRoute;
-    }
-    return null;
-  }, [selectedRouteId, subscribedRoutes, nearbyStops, vehicles, activatedRoute]);
-
-  const isSelectedRouteSubscribed = useMemo(
-    () => selectedRouteId ? subscribedRoutes.some((r) => r.gtfsId === selectedRouteId) : false,
-    [selectedRouteId, subscribedRoutes]
-  );
-
-  // Calculate route popover position - center horizontally at top of route
-  const routePopoverData = useMemo(() => {
-    if (!selectedRouteId || !patterns) return null;
-    const routePatterns = patterns.get(selectedRouteId);
-    if (!routePatterns || routePatterns.length === 0) return null;
-
-    const bounds = computeRouteBounds(routePatterns);
-    if (!bounds) return null;
-
-    const [[minLng], [maxLng, maxLat]] = bounds;
-    return {
-      lng: (minLng + maxLng) / 2,
-      lat: maxLat,
-      anchor: 'bottom' as const,
-    };
-  }, [selectedRouteId, patterns]);
-
-  const handleRouteUnsubscribe = useCallback(() => {
-    if (!selectedRouteId) return;
-    if (subscribedRoutes.some((r) => r.gtfsId === selectedRouteId)) {
-      onUnsubscribe?.(selectedRouteId);
-    }
-  }, [selectedRouteId, subscribedRoutes, onUnsubscribe]);
-
-  const handleRouteSubscribe = useCallback(() => {
-    if (!selectedRoute || !selectedRouteId) return;
-    onSubscribe?.({
-      gtfsId: selectedRoute.gtfsId,
-      shortName: selectedRoute.shortName,
-      longName: selectedRoute.longName,
-      mode: selectedRoute.mode,
-    });
-  }, [selectedRoute, selectedRouteId, onSubscribe]);
 
   const selectedVehicleRouteGtfsId = selectedVehicle ? `HSL:${selectedVehicle.routeId}` : null;
   const selectedVehicleRouteMode = selectedVehicle?.mode;
@@ -894,12 +864,12 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
   const selectedVehicleGtfsDir = selectedVehicle ? selectedVehicle.direction - 1 : null;
 
   // Build GeoJSON for route lines
-  const routeLinesGeoJson = useMemo((): FeatureCollection<LineString> => {
+  const routeLinesGeoJson = useMemo((): FeatureCollection<LineString, RouteLineFeatureProps> => {
     if (!showRouteLines || !patterns) {
       return { type: 'FeatureCollection', features: [] };
     }
 
-    const features: FeatureCollection<LineString>['features'] = [];
+    const features: FeatureCollection<LineString, RouteLineFeatureProps>['features'] = [];
 
     // Track which route IDs have already been rendered
     const renderedRouteIds = new Set<string>();
@@ -908,16 +878,20 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
       const isVehicleRoute = selectedVehicleRouteGtfsId === routeId;
       const isFocused = isSelectedRoute || isVehicleRoute;
       let opacity = isFocused ? 1 : 0.6;
+      let isDimmed = false;
 
       if (selectedVehicleRouteGtfsId && !isVehicleRoute) {
         opacity = 0.1;
+        isDimmed = true;
       } else if (selectedRouteId && !isSelectedRoute) {
         opacity = 0.1;
+        isDimmed = true;
       } else if (selectedStopRouteIds.size > 0) {
         opacity = selectedStopRouteIds.has(routeId) ? 1 : 0.1;
+        isDimmed = !selectedStopRouteIds.has(routeId);
       }
 
-      return { isFocused, opacity };
+      return { isFocused, opacity, isDimmed };
     };
 
     // Render subscribed routes
@@ -926,7 +900,7 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
       if (!routePatterns) continue;
       renderedRouteIds.add(route.gtfsId);
       const isSelected = selectedRouteId === route.gtfsId;
-      const { isFocused, opacity } = getRouteFocus(route.gtfsId, isSelected);
+      const { isFocused, opacity, isDimmed } = getRouteFocus(route.gtfsId, isSelected);
 
       for (const pattern of routePatterns) {
         if (pattern.geometry.length < 2) continue;
@@ -943,6 +917,7 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
             }),
             isSelected: isFocused,
             opacity,
+            isDimmed,
             sortKey: isFocused ? 3 : 2,
           },
           geometry: {
@@ -978,7 +953,7 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
       const routePatterns = patterns.get(routeId);
       if (!routePatterns) continue;
       const isSelected = selectedRouteId === routeId;
-      const { isFocused, opacity } = getRouteFocus(routeId, isSelected);
+      const { isFocused, opacity, isDimmed } = getRouteFocus(routeId, isSelected);
       // Resolve route mode from activated route, nearby stops, or fallback
       let mode: Route['mode'] = 'bus';
       if (routeId === selectedVehicleRouteGtfsId && selectedVehicleRouteMode) {
@@ -1012,6 +987,7 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
             color,
             isSelected: isFocused,
             opacity,
+            isDimmed,
             sortKey: isFocused ? 3 : 1,
           },
           geometry: {
@@ -1028,28 +1004,46 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
   // Build GeoJSON for stop markers
   // Always show the selected stop and subscribed stops, even if showStops is off
   // Also highlight stops on the selected vehicle's route
-  const stopsGeoJson = useMemo((): FeatureCollection<Point> => {
+  const stopsGeoJson = useMemo((): FeatureCollection<Point, StopFeatureProps> => {
     // Collect all stops to show, deduplicating by gtfsId
     const stopById: Record<string, Stop> = {};
-    const highlightedStopIds = new Set<string>();
+    const focusedStopIds = new Set<string>();
+    const hasStopRouteFocus = selectedStopRouteIds.size > 0;
+    const shouldFocusStops = Boolean(selectedVehicleRouteGtfsId || selectedRouteId || hasStopRouteFocus);
 
-    // When a vehicle is selected, find nearby stops on its route + direction and highlight them
-    if (selectedVehicleRouteGtfsId && selectedVehicleGtfsDir !== null && nearbyStops) {
+    const includeStop = (stop: Stop) => {
+      if (!(stop.gtfsId in stopById)) {
+        stopById[stop.gtfsId] = stop;
+      }
+    };
+
+    const isFocusedStop = (stop: Stop) => {
+      if (selectedVehicleRouteGtfsId && selectedVehicleGtfsDir !== null) {
+        return stopServesVehicleDirection(stop, selectedVehicleRouteGtfsId, selectedVehicleGtfsDir);
+      }
+      if (selectedRouteId) {
+        return stopServesRoute(stop, selectedRouteId);
+      }
+      if (hasStopRouteFocus) {
+        return stopServesAnyRoute(stop, selectedStopRouteIds);
+      }
+      return false;
+    };
+
+    if (shouldFocusStops && nearbyStops) {
       for (const stop of nearbyStops) {
-        if (!stop.routes.some((r) => r.gtfsId === selectedVehicleRouteGtfsId)) continue;
-        // Check direction: only highlight if this stop serves the vehicle's direction
-        const dirs = stop.routeDirections?.[selectedVehicleRouteGtfsId];
-        if (dirs && !dirs.includes(selectedVehicleGtfsDir)) continue;
-        highlightedStopIds.add(stop.gtfsId);
-        if (!(stop.gtfsId in stopById)) {
-          stopById[stop.gtfsId] = stop;
-        }
+        if (!isFocusedStop(stop)) continue;
+        focusedStopIds.add(stop.gtfsId);
+        includeStop(stop);
       }
     }
 
     // Always include selected stop
     if (selectedStop) {
-      stopById[selectedStop.gtfsId] = selectedStop;
+      includeStop(selectedStop);
+      if (isFocusedStop(selectedStop)) {
+        focusedStopIds.add(selectedStop.gtfsId);
+      }
     }
 
     // Always include subscribed stops
@@ -1085,12 +1079,10 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
     return {
       type: 'FeatureCollection',
       features: stopsToShow.map((stop) => {
-        const isHighlighted = highlightedStopIds.has(stop.gtfsId);
-        // Fade out non-highlighted stops when a vehicle is selected (same pattern as route selection)
-        let opacity = 0.85;
-        if (highlightedStopIds.size > 0 && !isHighlighted) {
-          opacity = 0.1;
-        }
+        const isSelected = selectedStop?.gtfsId === stop.gtfsId;
+        const isFocused = focusedStopIds.has(stop.gtfsId);
+        const isDimmed = shouldFocusStops && !isFocused && !isSelected;
+        const opacity = isDimmed ? 0.1 : 0.85;
 
         return {
           type: 'Feature' as const,
@@ -1099,8 +1091,9 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
             name: stop.name,
             code: stop.code,
             vehicleMode: stop.vehicleMode,
-            isSelected: selectedStop?.gtfsId === stop.gtfsId,
+            isSelected,
             opacity,
+            isDimmed,
             color: TRANSPORT_COLORS[stop.vehicleMode] ?? TRANSPORT_COLORS.bus,
           },
           geometry: {
@@ -1110,7 +1103,7 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
         };
       }),
     };
-  }, [showStops, nearbyStops, selectedStop, subscribedStops, selectedVehicleRouteGtfsId, selectedVehicleGtfsDir]);
+  }, [showStops, nearbyStops, selectedStop, subscribedStops, selectedVehicleRouteGtfsId, selectedVehicleGtfsDir, selectedRouteId, selectedStopRouteIds]);
 
   // Build GeoJSON for user location circles (flat on 3D tilted maps)
   const userCirclesGeoJson = useMemo((): FeatureCollection<Polygon> => {
@@ -1139,14 +1132,14 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
     return { type: 'FeatureCollection', features };
   }, [userLocation, nearbyRadius]);
 
-  // Close popover if vehicle disappears
+  // Clear vehicle selection if the selected vehicle disappears.
   useEffect(() => {
     if (selectedVehicleId && !selectedVehicle) {
       onVehicleSelect?.(null);
     }
   }, [selectedVehicleId, selectedVehicle, onVehicleSelect]);
 
-  // Helper to fit map to route bounds with popover padding
+  // Helper to fit map to route bounds while accounting for the top bar and bottom sheet.
   const fitRouteBounds = useCallback((routePatterns: RoutePattern[]) => {
     if (!mapRef.current) return;
     
@@ -1161,17 +1154,24 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
     const map = mapRef.current.getMap();
     if (!map) return;
 
+    // Previous flyTo/easeTo calls use padding to keep selected entities above the sheet.
+    // MapLibre retains that as transform edge padding, and cameraForBounds subtracts it
+    // in addition to this fit's own padding. Reset first so route bounds are fitted once.
+    resetCameraPadding(map);
+
     const container = map.getContainer();
     const { width, height } = container.getBoundingClientRect();
     if (width === 0 || height === 0) return;
-    
-    const popoverHeight = getPopoverHeight(width);
+
+    const topPadding = Math.min(TOP_BAR_HEIGHT + 24, height * 0.3);
+    const maxBottomPadding = Math.max(24, height - topPadding - 80);
+    const sidePadding = Math.min(48, Math.max(16, width * 0.08));
 
     const padding = {
-      top: popoverHeight + 40 + 10,
-      bottom: bottomPadding / 2 - 100,
-      left: 10,
-      right: 10,
+      top: topPadding,
+      bottom: Math.min(Math.max(bottomPadding + ROUTE_FIT_BOTTOM_MARGIN, 80), maxBottomPadding),
+      left: sidePadding,
+      right: sidePadding,
     };
 
 
@@ -1231,7 +1231,7 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
     }
   }, [selectedRouteId, patterns, fitRouteBounds]);
 
-  // Re-follow selected vehicle (triggered from popover button)
+  // Re-follow selected vehicle (triggered from the sheet detail view)
   const handleReFollowVehicle = useCallback(() => {
     setIsFollowingVehicle(true);
     isFollowingVehicleRef.current = true;
@@ -1265,7 +1265,7 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
     setTimeout(() => { isProgrammaticMoveRef.current = false; }, duration);
   }, [bottomPadding]);
 
-  // Re-center on route bounds (triggered from popover button)
+  // Re-center on route bounds (triggered from the sheet detail view)
   const handleReCenterRoute = useCallback(() => {
     setHasMovedFromRoute(false);
     if (!selectedRouteId || !patterns) return;
@@ -1274,6 +1274,35 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
       fitRouteBounds(routePatterns);
     }
   }, [selectedRouteId, patterns, fitRouteBounds]);
+
+  const handleReCenterStop = useCallback(() => {
+    setHasMovedFromStop(false);
+    if (!selectedStop || !mapRef.current) return;
+
+    const map = mapRef.current.getMap();
+    const duration = 500;
+    isProgrammaticMoveRef.current = true;
+    mapRef.current.flyTo({
+      center: [selectedStop.lon, selectedStop.lat],
+      zoom: Math.max(map?.getZoom() ?? 14, 14),
+      duration,
+      padding: { top: TOP_BAR_HEIGHT, left: 0, right: 0, bottom: bottomPadding },
+    });
+    setTimeout(() => { isProgrammaticMoveRef.current = false; }, duration);
+  }, [selectedStop, bottomPadding]);
+
+  useEffect(() => {
+    onCameraActionsChange?.({
+      refollowVehicle: handleReFollowVehicle,
+      recenterRoute: handleReCenterRoute,
+      recenterStop: handleReCenterStop,
+    });
+    return () => onCameraActionsChange?.(null);
+  }, [onCameraActionsChange, handleReFollowVehicle, handleReCenterRoute, handleReCenterStop]);
+
+  useEffect(() => {
+    onCameraStateChange?.({ isFollowingVehicle, hasMovedFromRoute, hasMovedFromStop });
+  }, [onCameraStateChange, isFollowingVehicle, hasMovedFromRoute, hasMovedFromStop]);
 
   // Handle map click - clear selections
   const handleMapClick = useCallback(() => {
@@ -1289,6 +1318,7 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
       const feature = evt.features[0];
       const routeId = feature.properties?.routeId as string | undefined;
       if (!routeId) return;
+      if (handleDimmedFeatureClick(evt, feature)) return;
 
       // Resolve full route info
       const subscribed = subscribedRoutes.find((r) => r.gtfsId === routeId);
@@ -1314,7 +1344,7 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
         onRouteActivate?.(activatedRoute);
       }
     },
-    [subscribedRoutes, nearbyStops, activatedRoute, onRouteActivate]
+    [subscribedRoutes, nearbyStops, activatedRoute, onRouteActivate, handleDimmedFeatureClick]
   );
 
   // Handle click on stop WebGL layer
@@ -1322,6 +1352,7 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
     (evt: MapLayerMouseEvent) => {
       if (!evt.features || evt.features.length === 0) return;
       const feature = evt.features[0];
+      if (handleDimmedFeatureClick(evt, feature)) return;
       const stopId = feature.properties?.gtfsId;
       if (!stopId) return;
 
@@ -1341,7 +1372,7 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
         onStopClick?.(stop);
       }
     },
-    [nearbyStops, subscribedStops, onStopClick]
+    [nearbyStops, subscribedStops, onStopClick, handleDimmedFeatureClick]
   );
 
   // Initial viewport for uncontrolled mode - only used on mount
@@ -1495,65 +1526,6 @@ const BusMapComponent = ({ patterns, onVehicleClick, onSubscribe, onUnsubscribe,
         <Layer {...vehiclePingStyle} />
         <Layer {...vehicleMarkerStyle} />
       </Source>
-
-      {/* Popovers rendered after vehicle markers for higher z-index */}
-      {/* Vehicle popover - follows selected vehicle */}
-      <AnimatePresence>
-        {selectedVehicle && (
-          <SelectedVehiclePopover
-            key={selectedVehicle.vehicleId}
-            vehicle={selectedVehicle}
-            onClose={() => selectedStop ? onVehicleDeselect?.() : onVehicleSelect?.(null)}
-            onSubscribe={handlePopoverSubscribe}
-            onUnsubscribe={handlePopoverUnsubscribe}
-            isFollowing={isFollowingVehicle}
-            onReFollow={handleReFollowVehicle}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* Route popover - shows centered at top of route */}
-      <AnimatePresence>
-        {selectedRoute && routePopoverData && (
-          <Marker
-            longitude={routePopoverData.lng}
-            latitude={routePopoverData.lat}
-            anchor={routePopoverData.anchor}
-            style={{ zIndex: 10 }}
-          >
-            <RoutePopover
-              route={selectedRoute}
-              isSubscribed={isSelectedRouteSubscribed}
-              patterns={patterns?.get(selectedRouteId!) || undefined}
-              vehicles={vehicles}
-              onClose={() => onRouteSelect?.(null)}
-              onSubscribe={handleRouteSubscribe}
-              onUnsubscribe={handleRouteUnsubscribe}
-              onBackToStop={onBackToStop}
-              onReCenter={hasMovedFromRoute ? handleReCenterRoute : undefined}
-            />
-          </Marker>
-        )}
-      </AnimatePresence>
-
-      {/* Stop popover - shows above selected stop */}
-      <AnimatePresence>
-        {selectedStop && !selectedVehicleId && !selectedRouteId && (
-          <Marker
-            longitude={selectedStop.lon}
-            latitude={selectedStop.lat}
-            anchor="bottom"
-            offset={[0, -10]}
-            style={{ zIndex: 10 }}
-          >
-            <StopPopover
-              stop={selectedStop}
-              onClose={() => onStopDeselect?.()}
-              onRouteActivate={onRouteActivate}
-            />
-          </Marker>
-        )}
-      </AnimatePresence>
 
 
       <AttributionControl position="bottom-right" compact={true} />

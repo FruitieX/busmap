@@ -86,9 +86,8 @@ const corrections = new Map<string, CorrectionState>();
  * Mutates a shared module-level Map keyed by vehicle ID (optionally scoped).
  *
  * @param scope — Optional namespace to isolate correction state. Different
- *   callers (e.g. the main render loop vs. a popover hook) should use separate
- *   scopes so they don't corrupt each other's state, especially when one caller
- *   may hold stale data (e.g. during AnimatePresence exit animations).
+ *   callers should use separate scopes so they don't corrupt each other's state,
+ *   especially when one caller may hold stale data during exit animations.
  */
 export const interpolateVehicle = (
   vehicle: TrackedVehicle,

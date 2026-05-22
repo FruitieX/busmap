@@ -1,16 +1,17 @@
 import { memo, useMemo, useEffect } from 'react';
-import type { Stop, StopDeparture } from '@/types';
+import type { Route, Stop, StopDeparture } from '@/types';
 import { TRANSPORT_COLORS } from '@/types';
 import { useStopStore, useSubscribedStopStore, useVehicleStore } from '@/stores';
 import { useStopTimetable, getStopTermini } from '@/lib';
 import { DELAY_LATE_THRESHOLD, DELAY_EARLY_THRESHOLD } from '@/constants';
-import { StarToggleButton } from './StarToggleButton';
+import { StarIcon } from './StarToggleButton';
 
 interface StopDetailsProps {
   stop: Stop;
   onBack: () => void;
   onDepartureClick: (departure: StopDeparture) => void;
-  onVehicleDeselect?: () => void;
+  onReCenter?: () => void;
+  onRouteActivate?: (route: Route) => void;
 }
 
 const formatDepartureTime = (serviceDay: number, departure: number): string => {
@@ -99,7 +100,7 @@ const DepartureCard = memo(({ departure, onClick, vehicleOnMap }: DepartureCardP
 
 DepartureCard.displayName = 'DepartureCard';
 
-const StopDetailsComponent = ({ stop, onBack, onDepartureClick, onVehicleDeselect }: StopDetailsProps) => {
+const StopDetailsComponent = ({ stop, onBack, onDepartureClick, onReCenter, onRouteActivate }: StopDetailsProps) => {
   const setStopDirections = useStopStore((state) => state.setStopDirections);
   const { data: timetable, isLoading } = useStopTimetable(stop.gtfsId);
 
@@ -115,6 +116,27 @@ const StopDetailsComponent = ({ stop, onBack, onDepartureClick, onVehicleDeselec
   }, [timetable?.directions, setStopDirections]);
 
   const color = TRANSPORT_COLORS[stop.vehicleMode] ?? TRANSPORT_COLORS.bus;
+
+  const routeLabels = useMemo(() => {
+    const uniqueRoutes = new Map<string, Route>();
+    for (const route of stop.routes) {
+      if (!uniqueRoutes.has(route.gtfsId)) {
+        uniqueRoutes.set(route.gtfsId, {
+          gtfsId: route.gtfsId,
+          shortName: route.shortName,
+          longName: route.longName,
+          mode: route.mode,
+        });
+      }
+    }
+
+    return Array.from(uniqueRoutes.values()).sort((a, b) => {
+      const aNum = parseInt(a.shortName, 10);
+      const bNum = parseInt(b.shortName, 10);
+      if (!isNaN(aNum) && !isNaN(bNum)) return aNum - bNum;
+      return a.shortName.localeCompare(b.shortName);
+    });
+  }, [stop.routes]);
 
   // Extract termini — prefer API headsigns, fall back to departure headsigns, then route longNames
   const termini = useMemo(() => {
@@ -155,9 +177,9 @@ const StopDetailsComponent = ({ stop, onBack, onDepartureClick, onVehicleDeselec
   }, [timetable?.departures]);
 
   return (
-    <div>
+    <div className="min-w-0 overflow-hidden">
       {/* Header with back button */}
-      <div className="flex items-center gap-3 mb-3 px-0.5">
+      <div className="flex items-center gap-3 mb-3 px-0.5 min-w-0">
         <button
           onClick={onBack}
           className="shrink-0 w-8 h-8 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
@@ -168,10 +190,7 @@ const StopDetailsComponent = ({ stop, onBack, onDepartureClick, onVehicleDeselec
         </button>
 
         <div
-          className="flex-1 min-w-0 flex items-center gap-3 rounded-lg px-2 py-1 -mx-1 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-          role="button"
-          tabIndex={0}
-          onClick={onVehicleDeselect}
+          className="flex-1 min-w-0 overflow-hidden flex items-center gap-3 rounded-lg px-2 py-1 -mx-1"
         >
           <div
             className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
@@ -181,8 +200,8 @@ const StopDetailsComponent = ({ stop, onBack, onDepartureClick, onVehicleDeselec
           </div>
 
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="font-medium text-gray-900 dark:text-white truncate">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="font-medium text-gray-900 dark:text-white truncate min-w-0">
                 {stop.name}
               </span>
               {stop.code && (
@@ -204,13 +223,49 @@ const StopDetailsComponent = ({ stop, onBack, onDepartureClick, onVehicleDeselec
           </div>
         </div>
 
-        {/* Save/remove stop button */}
-        <StarToggleButton
-          active={isSubscribed}
-          onToggle={() => isSubscribed ? unsubscribeFromStop(stop.gtfsId) : subscribeToStop(stop)}
-          title={isSubscribed ? 'Remove from saved stops' : 'Save stop'}
-          size="md"
-        />
+      </div>
+
+      {routeLabels.length > 0 && onRouteActivate && (
+        <div className="flex flex-wrap gap-1 mb-3 px-0.5">
+          {routeLabels.map((route) => (
+            <button
+              key={route.gtfsId}
+              className="inline-flex items-center px-2 py-1 rounded text-xs font-semibold text-white hover:opacity-80 transition-opacity"
+              style={{ backgroundColor: TRANSPORT_COLORS[route.mode ?? 'bus'] ?? TRANSPORT_COLORS.bus }}
+              onClick={() => onRouteActivate(route)}
+              title={route.longName}
+            >
+              {route.shortName}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="px-0.5 mb-3 flex gap-2">
+        {onReCenter && (
+          <button
+            onClick={onReCenter}
+            className="py-2 px-3 rounded-lg text-sm font-medium transition-colors bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700"
+            title="Re-center on stop"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </button>
+        )}
+        <button
+          onClick={() => isSubscribed ? unsubscribeFromStop(stop.gtfsId) : subscribeToStop(stop)}
+          className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
+            isSubscribed
+              ? 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
+              : 'text-white hover:opacity-90'
+          }`}
+          style={!isSubscribed ? { backgroundColor: color } : undefined}
+        >
+          <StarIcon active={isSubscribed} className="w-4 h-4" />
+          {isSubscribed ? 'Remove saved stop' : 'Save this stop'}
+        </button>
       </div>
 
       {/* Timetable */}
