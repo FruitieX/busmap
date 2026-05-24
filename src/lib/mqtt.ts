@@ -4,6 +4,11 @@ import { useVehicleStore } from '@/stores/vehicleStore';
 import { useSubscriptionStore } from '@/stores/subscriptionStore';
 
 const MQTT_BROKER = 'wss://mqtt.hsl.fi:443/';
+const MQTT_RECONNECT_PERIOD_MS = 1000;
+const MQTT_CONNECT_TIMEOUT_MS = 7000;
+const MQTT_INITIAL_CONNECT_TIMEOUT_MS = 10000;
+const MQTT_KEEPALIVE_SECONDS = 15;
+const MQTT_RESUME_RECONNECT_AFTER_MS = 45_000;
 
 // HFP topic structure:
 // /hfp/v2/journey/ongoing/vp/<transport_mode>/<operator_id>/<vehicle_number>/<route_id>/<direction_id>/<headsign>/<start_time>/<next_stop>/<geohash_level>/<geohash>/#
@@ -43,6 +48,7 @@ interface PendingNearbyConfig {
 
 class MqttService {
   private client: MqttClient | null = null;
+  private connectPromise: Promise<void> | null = null;
   private subscriptions = new Set<string>();
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 10;
@@ -54,18 +60,21 @@ class MqttService {
   private readonly BATCH_INTERVAL_MS = 100;
 
   connect(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (this.client?.connected) {
-        resolve();
-        return;
-      }
+    if (this.client?.connected) {
+      return Promise.resolve();
+    }
 
+    if (this.connectPromise) {
+      return this.connectPromise;
+    }
+
+    this.connectPromise = new Promise((resolve, reject) => {
       useVehicleStore.getState().setConnectionStatus('connecting');
 
       const options: IClientOptions = {
-        reconnectPeriod: 5000,
-        connectTimeout: 10000,
-        keepalive: 30,
+        reconnectPeriod: MQTT_RECONNECT_PERIOD_MS,
+        connectTimeout: MQTT_CONNECT_TIMEOUT_MS,
+        keepalive: MQTT_KEEPALIVE_SECONDS,
         clean: true,
       };
 
@@ -73,13 +82,11 @@ class MqttService {
 
       this.client.on('connect', () => {
         console.log('MQTT connected');
+        this.connectPromise = null;
         this.reconnectAttempts = 0;
         useVehicleStore.getState().setConnectionStatus('connected');
 
-        // Resubscribe to all topics
-        this.subscriptions.forEach((topic) => {
-          this.client?.subscribe(topic, { qos: 0 });
-        });
+        this.resubscribeAll();
 
         // Apply pending nearby config if any (fixes race condition on initial load)
         if (this.pendingNearbyConfig) {
@@ -121,26 +128,59 @@ class MqttService {
 
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
           console.error('Max reconnect attempts reached');
-          this.client?.end();
+          this.connectPromise = null;
+          this.client?.end(true);
         }
       });
 
       // Timeout for initial connection
       setTimeout(() => {
         if (!this.client?.connected) {
+          this.connectPromise = null;
           reject(new Error('Connection timeout'));
         }
-      }, 15000);
+      }, MQTT_INITIAL_CONNECT_TIMEOUT_MS);
     });
+
+    return this.connectPromise;
   }
 
   disconnect() {
     if (this.client) {
+      this.connectPromise = null;
       this.subscriptions.clear();
       this.client.end();
       this.client = null;
       useVehicleStore.getState().setConnectionStatus('disconnected');
     }
+  }
+
+  private resubscribeAll() {
+    this.subscriptions.forEach((topic) => {
+      this.client?.subscribe(topic, { qos: 0 });
+    });
+  }
+
+  private reconnectNow(reason: string) {
+    console.log(`MQTT reconnecting immediately (${reason})`);
+    this.reconnectAttempts = 0;
+    this.connectPromise = null;
+    useVehicleStore.getState().setConnectionStatus('connecting');
+
+    if (this.client) {
+      const previousClient = this.client;
+      this.client = null;
+      previousClient.removeAllListeners();
+      try {
+        previousClient.end(true);
+      } catch {
+        // Ignore stale socket cleanup errors
+      }
+    }
+
+    this.connect().catch((error) => {
+      console.error('MQTT immediate reconnect failed:', error);
+    });
   }
 
   subscribeToRoute(routeId: string) {
@@ -251,6 +291,7 @@ class MqttService {
   private nearbyRadius: number = 0;
   // Track if we're paused (tab hidden)
   private isPaused: boolean = false;
+  private pausedAt: number | null = null;
   // Actively selected route IDs (temp subscriptions) — vehicles on these routes
   // should always pass through even when nearby mode is off
   private activeRouteIds = new Set<string>();
@@ -429,49 +470,42 @@ class MqttService {
   pause() {
     if (this.isPaused) return;
     this.isPaused = true;
+    this.pausedAt = Date.now();
     console.log('MQTT paused (tab hidden)');
   }
 
   resume() {
-    if (!this.isPaused) return;
+    const pausedFor = this.pausedAt ? Date.now() - this.pausedAt : 0;
+    const wasPaused = this.isPaused;
+
     this.isPaused = false;
-    console.log('MQTT resumed (tab visible)');
+    this.pausedAt = null;
+
+    if (wasPaused) {
+      console.log('MQTT resumed (tab visible)');
+    }
 
     // Always reset reconnect attempts so we get a fresh retry budget
     this.reconnectAttempts = 0;
-    
-    if (this.client?.connected) {
+
+    const shouldRefreshConnection = pausedFor >= MQTT_RESUME_RECONNECT_AFTER_MS;
+
+    if (this.client?.connected && !shouldRefreshConnection) {
       useVehicleStore.getState().setConnectionStatus('connected');
       // Force resubscribe — the broker may have dropped our session while idle
-      this.subscriptions.forEach((topic) => {
-        this.client?.subscribe(topic, { qos: 0 });
-      });
-    } else {
-      // Client ended or disconnected — tear down and create a fresh connection
-      // so we don't fight stale socket state
-      const savedSubscriptions = new Set(this.subscriptions);
-      const savedNearbyTopics = [...this.currentNearbyTopics];
-      const savedNearbyCenter = this.nearbyCenter;
-      const savedNearbyRadius = this.nearbyRadius;
-      const savedActiveRouteIds = new Set(this.activeRouteIds);
-
-      // Clean up old client without clearing our subscription bookkeeping
-      if (this.client) {
-        try { this.client.end(true); } catch { /* ignore */ }
-        this.client = null;
-      }
-
-      // Restore bookkeeping so connect() resubscribes via 'connect' handler
-      this.subscriptions = savedSubscriptions;
-      this.currentNearbyTopics = savedNearbyTopics;
-      this.nearbyCenter = savedNearbyCenter;
-      this.nearbyRadius = savedNearbyRadius;
-      this.activeRouteIds = savedActiveRouteIds;
-
-      this.connect().catch((err) => {
-        console.error('MQTT reconnect on resume failed:', err);
-      });
+      this.resubscribeAll();
+      return;
     }
+
+    if (this.connectPromise && !shouldRefreshConnection) {
+      useVehicleStore.getState().setConnectionStatus('connecting');
+      return;
+    }
+
+    const reason = shouldRefreshConnection
+      ? `resume after ${Math.round(pausedFor / 1000)}s in background`
+      : 'resume while disconnected';
+    this.reconnectNow(reason);
   }
 }
 
@@ -479,12 +513,18 @@ class MqttService {
 export const mqttService: MqttService =
   (import.meta.hot?.data?.mqttService as MqttService | undefined) ?? new MqttService();
 
-// Pause/resume MQTT when tab visibility changes (avoid duplicates on HMR)
+// Pause/resume MQTT when the app foregrounds/backgrounds (avoid duplicates on HMR)
 if (typeof document !== 'undefined') {
   // Clean up old listener on HMR before adding new one
   if (import.meta.hot?.data?.visibilityHandler) {
     document.removeEventListener('visibilitychange', import.meta.hot.data.visibilityHandler);
   }
+  if (import.meta.hot?.data?.mqttWindowResumeHandler) {
+    window.removeEventListener('focus', import.meta.hot.data.mqttWindowResumeHandler);
+    window.removeEventListener('online', import.meta.hot.data.mqttWindowResumeHandler);
+    window.removeEventListener('pageshow', import.meta.hot.data.mqttWindowResumeHandler);
+  }
+
   const visibilityHandler = () => {
     if (document.hidden) {
       mqttService.pause();
@@ -492,9 +532,21 @@ if (typeof document !== 'undefined') {
       mqttService.resume();
     }
   };
+
+  const windowResumeHandler = () => {
+    if (!document.hidden) {
+      mqttService.resume();
+    }
+  };
+
   document.addEventListener('visibilitychange', visibilityHandler);
+  window.addEventListener('focus', windowResumeHandler);
+  window.addEventListener('online', windowResumeHandler);
+  window.addEventListener('pageshow', windowResumeHandler);
+
   if (import.meta.hot) {
     import.meta.hot.data.mqttService = mqttService;
     import.meta.hot.data.visibilityHandler = visibilityHandler;
+    import.meta.hot.data.mqttWindowResumeHandler = windowResumeHandler;
   }
 }

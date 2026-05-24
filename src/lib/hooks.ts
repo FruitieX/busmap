@@ -1,5 +1,18 @@
-import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
-import { fetchAllRoutes, fetchAllStops, fetchRoutePatterns, fetchStopTimetable, getCachedRoutes, getCachedStops, setCachedRoutes, setCachedStops, isApiKeyConfigured } from './api';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import {
+  fetchAllRoutes,
+  fetchAllStops,
+  fetchRoutePatterns,
+  fetchStopTimetable,
+  getCachedRoutes,
+  getCachedRoutesSnapshot,
+  getCachedStops,
+  getCachedStopsSnapshot,
+  setCachedRoutes,
+  setCachedStops,
+  isApiKeyConfigured,
+  STATIC_API_CACHE_TTL,
+} from './api';
 import type { StopTimetableResult } from './api';
 import type { Route, RoutePattern, Stop } from '@/types';
 
@@ -7,58 +20,44 @@ const ROUTES_QUERY_KEY = ['routes', 'normalized'] as const;
 const STOPS_QUERY_KEY = ['stops', 'normalized'] as const;
 
 export const useRoutes = () => {
-  const queryClient = useQueryClient();
+  const cachedRoutes = getCachedRoutesSnapshot();
 
   return useQuery<Route[], Error>({
     queryKey: ROUTES_QUERY_KEY,
     queryFn: async () => {
-      // Try cache first
-      const cached = getCachedRoutes();
-      if (cached) {
-        // Still fetch in background to update cache
-        fetchAllRoutes()
-          .then((routes) => {
-            setCachedRoutes(routes);
-            queryClient.setQueryData(ROUTES_QUERY_KEY, routes);
-          })
-          .catch(() => {});
-        return cached;
-      }
+      const cached = await getCachedRoutes();
+      if (cached) return cached;
 
       const routes = await fetchAllRoutes();
-      setCachedRoutes(routes);
+      await setCachedRoutes(routes);
       return routes;
     },
-    staleTime: 1000 * 60 * 60, // 1 hour
-    gcTime: 1000 * 60 * 60 * 24, // 24 hours
+    initialData: cachedRoutes?.value,
+    initialDataUpdatedAt: cachedRoutes?.timestamp,
+    staleTime: STATIC_API_CACHE_TTL,
+    gcTime: STATIC_API_CACHE_TTL,
     enabled: isApiKeyConfigured(),
     retry: 2,
   });
 };
 
 export const useStops = (enabled = true) => {
-  const queryClient = useQueryClient();
+  const cachedStops = getCachedStopsSnapshot();
 
   return useQuery<Stop[], Error>({
     queryKey: STOPS_QUERY_KEY,
     queryFn: async () => {
-      const cached = getCachedStops();
-      if (cached) {
-        fetchAllStops()
-          .then((stops) => {
-            setCachedStops(stops);
-            queryClient.setQueryData(STOPS_QUERY_KEY, stops);
-          })
-          .catch(() => {});
-        return cached;
-      }
+      const cached = await getCachedStops();
+      if (cached) return cached;
 
       const stops = await fetchAllStops();
-      setCachedStops(stops);
+      await setCachedStops(stops);
       return stops;
     },
-    staleTime: 1000 * 60 * 60, // 1 hour
-    gcTime: 1000 * 60 * 60 * 24, // 24 hours
+    initialData: cachedStops?.value,
+    initialDataUpdatedAt: cachedStops?.timestamp,
+    staleTime: STATIC_API_CACHE_TTL,
+    gcTime: STATIC_API_CACHE_TTL,
     enabled: enabled && isApiKeyConfigured(),
     retry: 2,
   });
@@ -68,8 +67,8 @@ export const useRoutePatterns = (routeIds: string[]) => {
   return useQuery<Map<string, RoutePattern[]>, Error>({
     queryKey: ['routePatterns', routeIds],
     queryFn: () => fetchRoutePatterns(routeIds),
-    staleTime: 1000 * 60 * 60, // 1 hour
-    gcTime: 1000 * 60 * 60 * 24, // 24 hours
+    staleTime: STATIC_API_CACHE_TTL,
+    gcTime: STATIC_API_CACHE_TTL,
     enabled: routeIds.length > 0 && isApiKeyConfigured(),
     placeholderData: keepPreviousData, // keep showing old patterns while refetching
   });

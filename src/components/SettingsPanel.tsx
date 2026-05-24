@@ -1,6 +1,8 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useSettingsStore, useSubscriptionStore, useSubscribedStopStore } from '@/stores';
+import { clearStaticApiCache } from '@/lib';
 import { MAP_STYLES } from '@/types';
 import type { MapStyle, RouteColorMode } from '@/types';
 
@@ -11,6 +13,7 @@ interface SettingsPanelProps {
 
 const SettingsPanelComponent = ({ isOpen, onClose }: SettingsPanelProps) => {
   const historyPushedRef = useRef(false);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     if (!isOpen) {
@@ -67,20 +70,44 @@ const SettingsPanelComponent = ({ isOpen, onClose }: SettingsPanelProps) => {
   } = useSettingsStore();
 
   const clearAllSubscriptions = useSubscriptionStore((state) => state.clearAllSubscriptions);
-  const subscribedCount = useSubscriptionStore((state) => state.subscribedRoutes.length);
   const clearAllStops = useSubscribedStopStore((state) => state.clearAllStops);
-  const subscribedStopCount = useSubscribedStopStore((state) => state.subscribedStops.length);
-  const totalSavedCount = subscribedCount + subscribedStopCount;
 
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'updating' | 'up-to-date'>('idle');
+  const [cacheClearStatus, setCacheClearStatus] = useState<'idle' | 'clearing' | 'cleared'>('idle');
+  const [isClearingAllData, setIsClearingAllData] = useState(false);
 
-  const handleClearAllSavedData = useCallback(() => {
-    if (totalSavedCount === 0) return;
-    const confirmed = window.confirm('Clear all saved routes and stops? This cannot be undone.');
+  const clearStaticApiQueryData = useCallback(() => {
+    queryClient.removeQueries({ queryKey: ['routes'] });
+    queryClient.removeQueries({ queryKey: ['stops'] });
+    queryClient.removeQueries({ queryKey: ['routePatterns'] });
+  }, [queryClient]);
+
+  const handleClearApiCache = useCallback(async () => {
+    setCacheClearStatus('clearing');
+    try {
+      await clearStaticApiCache();
+      clearStaticApiQueryData();
+      setCacheClearStatus('cleared');
+      setTimeout(() => setCacheClearStatus('idle'), 3000);
+    } catch {
+      setCacheClearStatus('idle');
+    }
+  }, [clearStaticApiQueryData]);
+
+  const handleClearAllSavedData = useCallback(async () => {
+    const confirmed = window.confirm('Clear all saved routes, stops, and cached API data? This cannot be undone.');
     if (!confirmed) return;
-    clearAllSubscriptions();
-    clearAllStops();
-  }, [clearAllSubscriptions, clearAllStops, totalSavedCount]);
+
+    setIsClearingAllData(true);
+    try {
+      clearAllSubscriptions();
+      clearAllStops();
+      await clearStaticApiCache();
+      clearStaticApiQueryData();
+    } finally {
+      setIsClearingAllData(false);
+    }
+  }, [clearAllSubscriptions, clearAllStops, clearStaticApiQueryData]);
 
   const checkForUpdates = useCallback(async () => {
     setUpdateStatus('checking');
@@ -323,11 +350,22 @@ const SettingsPanelComponent = ({ isOpen, onClose }: SettingsPanelProps) => {
                     Data
                   </h3>
                   <button
+                    className="w-full p-3 rounded-xl bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 font-medium hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
+                    onClick={handleClearApiCache}
+                    disabled={cacheClearStatus === 'clearing' || isClearingAllData}
+                  >
+                    {cacheClearStatus === 'clearing'
+                      ? 'Clearing cache...'
+                      : cacheClearStatus === 'cleared'
+                        ? 'Cache cleared'
+                        : 'Clear API cache'}
+                  </button>
+                  <button
                     className="w-full p-3 rounded-xl bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 font-medium hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors disabled:opacity-50"
                     onClick={handleClearAllSavedData}
-                    disabled={totalSavedCount === 0}
+                    disabled={isClearingAllData || cacheClearStatus === 'clearing'}
                   >
-                    Clear all saved data ({totalSavedCount})
+                    {isClearingAllData ? 'Clearing saved data...' : 'Clear all saved data'}
                   </button>
                 </div>
               </section>

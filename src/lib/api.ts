@@ -1,9 +1,220 @@
 import type { Route, RoutePattern, TransportMode, Stop, StopRoute, StopDeparture } from '@/types';
 
 const API_ENDPOINT = 'https://api.digitransit.fi/routing/v2/hsl/gtfs/v1';
+export const STATIC_API_CACHE_TTL = 24 * 60 * 60 * 1000;
+const STATIC_API_CACHE_NAME = 'busmap-static-api-cache-v1';
+const LOCAL_STORAGE_CACHE_SIZE_LIMIT = 2_500_000;
 
 const getApiKey = (): string | undefined => {
   return import.meta.env.VITE_DIGITRANSIT_API_KEY;
+};
+
+export interface CachedValue<T> {
+  value: T;
+  timestamp: number;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+);
+
+const isOptionalString = (value: unknown): value is string | null | undefined => (
+  value === undefined || value === null || typeof value === 'string'
+);
+
+const getLocalStorageItem = (key: string): string | null => {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
+const setLocalStorageItem = (key: string, value: string): void => {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Ignore storage errors
+  }
+};
+
+const removeLocalStorageItem = (key: string): void => {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // Ignore storage errors
+  }
+};
+
+const removeLocalStorageItemsByPrefix = (prefix: string): void => {
+  try {
+    const keysToRemove: string[] = [];
+    for (let index = 0; index < localStorage.length; index++) {
+      const key = localStorage.key(index);
+      if (key?.startsWith(prefix)) {
+        keysToRemove.push(key);
+      }
+    }
+
+    for (const key of keysToRemove) {
+      localStorage.removeItem(key);
+    }
+  } catch {
+    // Ignore storage errors
+  }
+};
+
+const parseJson = (value: string): unknown | null => {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+};
+
+const stringifyJson = (value: unknown): string | null => {
+  try {
+    return JSON.stringify(value) ?? null;
+  } catch {
+    return null;
+  }
+};
+
+const writeLocalStorageSerialized = (key: string, serialized: string): void => {
+  if (serialized.length > LOCAL_STORAGE_CACHE_SIZE_LIMIT) {
+    removeLocalStorageItem(key);
+    return;
+  }
+
+  setLocalStorageItem(key, serialized);
+};
+
+const getCacheStorageRequest = (key: string): Request | null => {
+  if (typeof window === 'undefined') return null;
+
+  return new Request(`${window.location.origin}/__busmap-api-cache/${encodeURIComponent(key)}`);
+};
+
+const readCacheStorageItem = async (key: string): Promise<unknown | null> => {
+  if (typeof window === 'undefined' || !window.caches) return null;
+
+  const request = getCacheStorageRequest(key);
+  if (!request) return null;
+
+  try {
+    const cache = await window.caches.open(STATIC_API_CACHE_NAME);
+    const response = await cache.match(request);
+    if (!response) return null;
+
+    return await response.json();
+  } catch {
+    return null;
+  }
+};
+
+const writeCacheStorageItem = async (key: string, serialized: string): Promise<void> => {
+  if (typeof window === 'undefined' || !window.caches) return;
+
+  const request = getCacheStorageRequest(key);
+  if (!request) return;
+
+  try {
+    const cache = await window.caches.open(STATIC_API_CACHE_NAME);
+    await cache.put(request, new Response(serialized, {
+      headers: { 'Content-Type': 'application/json' },
+    }));
+  } catch {
+    // Ignore storage errors
+  }
+};
+
+const removeCacheStorageItem = async (key: string): Promise<void> => {
+  if (typeof window === 'undefined' || !window.caches) return;
+
+  const request = getCacheStorageRequest(key);
+  if (!request) return;
+
+  try {
+    const cache = await window.caches.open(STATIC_API_CACHE_NAME);
+    await cache.delete(request);
+  } catch {
+    // Ignore storage errors
+  }
+};
+
+const deleteCacheStorage = async (cacheName: string): Promise<void> => {
+  if (typeof window === 'undefined' || !window.caches) return;
+
+  try {
+    await window.caches.delete(cacheName);
+  } catch {
+    // Ignore storage errors
+  }
+};
+
+const normalizeTimedCachePayload = <T>(
+  payload: unknown,
+  field: string,
+  normalizeValue: (value: unknown) => T | null
+): CachedValue<T> | null => {
+  if (!isRecord(payload) || typeof payload.timestamp !== 'number') return null;
+
+  if (Date.now() - payload.timestamp > STATIC_API_CACHE_TTL) return null;
+
+  const value = normalizeValue(payload[field]);
+  if (!value) return null;
+
+  return { value, timestamp: payload.timestamp };
+};
+
+const readTimedCacheValue = <T>(
+  key: string,
+  field: string,
+  normalizeValue: (value: unknown) => T | null
+): CachedValue<T> | null => {
+  const cached = getLocalStorageItem(key);
+  if (!cached) return null;
+
+  const parsed = parseJson(cached);
+  const cacheValue = normalizeTimedCachePayload(parsed, field, normalizeValue);
+  if (!cacheValue) {
+    removeLocalStorageItem(key);
+    return null;
+  }
+
+  return cacheValue;
+};
+
+const readPersistentTimedCacheValue = async <T>(
+  key: string,
+  field: string,
+  normalizeValue: (value: unknown) => T | null
+): Promise<CachedValue<T> | null> => {
+  const cachedPayload = await readCacheStorageItem(key);
+  const cachedValue = normalizeTimedCachePayload(cachedPayload, field, normalizeValue);
+  if (cachedValue) return cachedValue;
+
+  if (cachedPayload !== null) {
+    await removeCacheStorageItem(key);
+  }
+
+  const localValue = readTimedCacheValue(key, field, normalizeValue);
+  if (!localValue) return null;
+
+  const serialized = stringifyJson({ [field]: localValue.value, timestamp: localValue.timestamp });
+  if (serialized) {
+    await writeCacheStorageItem(key, serialized);
+  }
+
+  return localValue;
+};
+
+const writePersistentTimedCacheValue = async (key: string, field: string, value: unknown): Promise<void> => {
+  const serialized = stringifyJson({ [field]: value, timestamp: Date.now() });
+  if (!serialized) return;
+
+  writeLocalStorageSerialized(key, serialized);
+  await writeCacheStorageItem(key, serialized);
 };
 
 const graphqlFetch = async <T>(query: string): Promise<T> => {
@@ -114,11 +325,15 @@ type SearchableRawRoute = RawRoute & {
   longName: string;
 };
 
-const isSearchableRoute = (route: RawRoute | null): route is SearchableRawRoute => (
-  typeof route?.gtfsId === 'string' && route.gtfsId.length > 0
-  && typeof route.shortName === 'string' && route.shortName.length > 0
-  && typeof route.longName === 'string'
-);
+const isSearchableRoute = (route: unknown): route is SearchableRawRoute => {
+  if (!isRecord(route)) return false;
+
+  return typeof route.gtfsId === 'string' && route.gtfsId.length > 0
+    && typeof route.shortName === 'string' && route.shortName.length > 0
+    && typeof route.longName === 'string'
+    && isOptionalString(route.mode)
+    && isOptionalString(route.color);
+};
 
 const normalizeRoute = (route: SearchableRawRoute): Route => ({
   gtfsId: route.gtfsId,
@@ -128,40 +343,77 @@ const normalizeRoute = (route: SearchableRawRoute): Route => ({
   color: route.color ?? undefined,
 });
 
-const isSearchableStop = (stop: RawStop | null): stop is RawStop & {
+const isSearchableStop = (stop: unknown): stop is RawStop & {
   gtfsId: string;
   name: string;
   lat: number;
   lon: number;
-} => (
-  typeof stop?.gtfsId === 'string' && stop.gtfsId.length > 0
-  && typeof stop.name === 'string' && stop.name.length > 0
-  && typeof stop.lat === 'number'
-  && typeof stop.lon === 'number'
-);
+} => {
+  if (!isRecord(stop)) return false;
 
-const isSearchableStopRoute = (route: RawStopRoute | null): route is RawStopRoute & {
+  return typeof stop.gtfsId === 'string' && stop.gtfsId.length > 0
+    && typeof stop.name === 'string' && stop.name.length > 0
+    && typeof stop.lat === 'number'
+    && typeof stop.lon === 'number'
+    && isOptionalString(stop.code)
+    && isOptionalString(stop.vehicleMode)
+    && (stop.routes === undefined || stop.routes === null || Array.isArray(stop.routes))
+    && (stop.patterns === undefined || stop.patterns === null || Array.isArray(stop.patterns));
+};
+
+const isSearchableStopRoute = (route: unknown): route is RawStopRoute & {
   gtfsId: string;
   shortName: string;
   longName: string;
-} => (
-  typeof route?.gtfsId === 'string' && route.gtfsId.length > 0
-  && typeof route.shortName === 'string' && route.shortName.length > 0
-  && typeof route.longName === 'string'
-);
+} => {
+  if (!isRecord(route)) return false;
+
+  return typeof route.gtfsId === 'string' && route.gtfsId.length > 0
+    && typeof route.shortName === 'string' && route.shortName.length > 0
+    && typeof route.longName === 'string'
+    && isOptionalString(route.mode);
+};
+
+const sortRoutesByShortName = (routes: Route[]): Route[] => routes.sort((firstRoute, secondRoute) => {
+  const firstNumber = parseInt(firstRoute.shortName, 10);
+  const secondNumber = parseInt(secondRoute.shortName, 10);
+
+  if (!isNaN(firstNumber) && !isNaN(secondNumber)) {
+    return firstNumber - secondNumber;
+  }
+  return firstRoute.shortName.localeCompare(secondRoute.shortName);
+});
+
+const normalizeRouteList = (rawRoutes: unknown[]): Route[] => {
+  const seen = new Set<string>();
+  const routes: Route[] = [];
+
+  for (const route of rawRoutes) {
+    if (!isSearchableRoute(route)) continue;
+    if (seen.has(route.shortName)) continue;
+
+    seen.add(route.shortName);
+    routes.push(normalizeRoute(route));
+  }
+
+  return sortRoutesByShortName(routes);
+};
 
 const getStopPatternMetadata = (stop: RawStop) => {
   const headsigns = new Set<string>();
   const routeDirections: Record<string, number[]> = {};
 
-  for (const pattern of stop.patterns ?? []) {
-    if (!pattern) continue;
+  const patterns = Array.isArray(stop.patterns) ? stop.patterns : [];
+  for (const pattern of patterns) {
+    if (!isRecord(pattern)) continue;
 
-    if (pattern.headsign) {
+    if (typeof pattern.headsign === 'string') {
       headsigns.add(pattern.headsign);
     }
 
-    const routeId = pattern.route?.gtfsId;
+    const routeId = isRecord(pattern.route) && typeof pattern.route.gtfsId === 'string'
+      ? pattern.route.gtfsId
+      : null;
     if (!routeId || typeof pattern.directionId !== 'number') continue;
 
     if (!(routeId in routeDirections)) {
@@ -193,7 +445,7 @@ const normalizeStop = (stop: RawStop & {
     lat: stop.lat,
     lon: stop.lon,
     vehicleMode: normalizeMode(stop.vehicleMode ?? undefined),
-    routes: (stop.routes ?? [])
+    routes: (Array.isArray(stop.routes) ? stop.routes : [])
       .filter(isSearchableStopRoute)
       .map((route) => ({
         gtfsId: route.gtfsId,
@@ -217,31 +469,7 @@ export const fetchAllRoutes = async (): Promise<Route[]> => {
   }`;
 
   const data = await graphqlFetch<RoutesResponse>(query);
-
-  // Deduplicate routes by shortName (API sometimes returns duplicates)
-  const seen = new Set<string>();
-  const routes: Route[] = [];
-
-  for (const route of data.routes) {
-    if (!isSearchableRoute(route)) continue;
-    if (!seen.has(route.shortName)) {
-      seen.add(route.shortName);
-      routes.push(normalizeRoute(route));
-    }
-  }
-
-  // Sort by route number (numeric sort)
-  routes.sort((a, b) => {
-    const aNum = parseInt(a.shortName, 10);
-    const bNum = parseInt(b.shortName, 10);
-
-    if (!isNaN(aNum) && !isNaN(bNum)) {
-      return aNum - bNum;
-    }
-    return a.shortName.localeCompare(b.shortName);
-  });
-
-  return routes;
+  return normalizeRouteList(data.routes);
 };
 
 interface RoutePatternResponse {
@@ -258,7 +486,17 @@ interface RoutePatternResponse {
 export const fetchRoutesByIds = async (routeIds: string[]): Promise<Route[]> => {
   if (routeIds.length === 0) return [];
 
-  const idsString = routeIds.map((id) => `"${id}"`).join(', ');
+  const cachedRoutes = await getCachedRoutes();
+  const cachedRoutesById = new Map(cachedRoutes?.map((route) => [route.gtfsId, route]) ?? []);
+  const missingRouteIds = routeIds.filter((routeId) => !cachedRoutesById.has(routeId));
+
+  if (missingRouteIds.length === 0) {
+    return routeIds
+      .map((routeId) => cachedRoutesById.get(routeId))
+      .filter((route): route is Route => route !== undefined);
+  }
+
+  const idsString = missingRouteIds.map((routeId) => `"${routeId}"`).join(', ');
 
   const query = `{
     routes(ids: [${idsString}]) {
@@ -271,9 +509,14 @@ export const fetchRoutesByIds = async (routeIds: string[]): Promise<Route[]> => 
 
   const data = await graphqlFetch<RoutesResponse>(query);
 
-  return data.routes
+  const fetchedRoutesById = new Map(data.routes
     .filter(isSearchableRoute)
-    .map(normalizeRoute);
+    .map(normalizeRoute)
+    .map((route) => [route.gtfsId, route]));
+
+  return routeIds
+    .map((routeId) => cachedRoutesById.get(routeId) ?? fetchedRoutesById.get(routeId))
+    .filter((route): route is Route => route !== undefined);
 };
 
 export const fetchRoutePatterns = async (routeIds: string[]): Promise<Map<string, RoutePattern[]>> => {
@@ -281,7 +524,14 @@ export const fetchRoutePatterns = async (routeIds: string[]): Promise<Map<string
     return new Map();
   }
 
-  const idsString = routeIds.map((id) => `"${id}"`).join(', ');
+  const cachedPatterns = await getCachedRoutePatterns(routeIds);
+  const missingRouteIds = routeIds.filter((routeId) => !cachedPatterns.has(routeId));
+
+  if (missingRouteIds.length === 0) {
+    return cachedPatterns;
+  }
+
+  const idsString = missingRouteIds.map((routeId) => `"${routeId}"`).join(', ');
 
   const query = `{
     routes(ids: [${idsString}]) {
@@ -310,7 +560,19 @@ export const fetchRoutePatterns = async (routeIds: string[]): Promise<Map<string
     result.set(route.gtfsId, patterns);
   }
 
-  return result;
+  for (const routeId of missingRouteIds) {
+    if (!result.has(routeId)) {
+      result.set(routeId, []);
+    }
+  }
+
+  await setCachedRoutePatterns(result);
+
+  for (const [routeId, patterns] of result) {
+    cachedPatterns.set(routeId, patterns);
+  }
+
+  return cachedPatterns;
 };
 
 // Check if the API key is configured
@@ -321,99 +583,138 @@ export const isApiKeyConfigured = (): boolean => {
 
 // Cache routes in localStorage
 const ROUTES_CACHE_KEY = 'busmap-routes-cache';
-const ROUTES_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
-interface RoutesCache {
-  routes: RawRoute[];
-  timestamp: number;
-}
+const normalizeCachedRoutes = (value: unknown): Route[] | null => {
+  if (!Array.isArray(value)) return null;
 
-export const getCachedRoutes = (): Route[] | null => {
-  try {
-    const cached = localStorage.getItem(ROUTES_CACHE_KEY);
-    if (!cached) return null;
-
-    const data: RoutesCache = JSON.parse(cached);
-    if (Date.now() - data.timestamp > ROUTES_CACHE_TTL) {
-      localStorage.removeItem(ROUTES_CACHE_KEY);
-      return null;
-    }
-
-    const routes = data.routes.filter(isSearchableRoute).map(normalizeRoute);
-    if (routes.length === 0) {
-      localStorage.removeItem(ROUTES_CACHE_KEY);
-      return null;
-    }
-
-    setCachedRoutes(routes);
-    return routes;
-  } catch {
-    return null;
-  }
+  const routes = normalizeRouteList(value);
+  return routes.length > 0 ? routes : null;
 };
 
-export const setCachedRoutes = (routes: Route[]): void => {
-  try {
-    const data: RoutesCache = {
-      routes,
-      timestamp: Date.now(),
-    };
-    localStorage.setItem(ROUTES_CACHE_KEY, JSON.stringify(data));
-  } catch {
-    // Ignore storage errors
-  }
+export const getCachedRoutesSnapshot = (): CachedValue<Route[]> | null => (
+  readTimedCacheValue(ROUTES_CACHE_KEY, 'routes', normalizeCachedRoutes)
+);
+
+export const getCachedRoutes = async (): Promise<Route[] | null> => (
+  (await readPersistentTimedCacheValue(ROUTES_CACHE_KEY, 'routes', normalizeCachedRoutes))?.value ?? null
+);
+
+export const setCachedRoutes = async (routes: Route[]): Promise<void> => {
+  await writePersistentTimedCacheValue(ROUTES_CACHE_KEY, 'routes', routes);
 };
 
 // Cache stops in localStorage
 const STOPS_CACHE_KEY = 'busmap-stops-cache';
-const STOPS_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
-interface StopsCache {
-  stops: Stop[];
-  timestamp: number;
-}
-
-const isCachedStop = (stop: Stop | null): stop is Stop => (
-  typeof stop?.gtfsId === 'string' && stop.gtfsId.length > 0
-  && typeof stop.name === 'string' && stop.name.length > 0
-  && typeof stop.lat === 'number'
-  && typeof stop.lon === 'number'
-  && Array.isArray(stop.routes)
+const isTransportMode = (value: unknown): value is TransportMode => (
+  value === 'bus'
+  || value === 'tram'
+  || value === 'train'
+  || value === 'ferry'
+  || value === 'metro'
+  || value === 'ubus'
+  || value === 'robot'
 );
 
-export const getCachedStops = (): Stop[] | null => {
-  try {
-    const cached = localStorage.getItem(STOPS_CACHE_KEY);
-    if (!cached) return null;
+const isCachedStopRoute = (route: unknown): route is StopRoute => {
+  if (!isRecord(route)) return false;
 
-    const data: StopsCache = JSON.parse(cached);
-    if (Date.now() - data.timestamp > STOPS_CACHE_TTL) {
-      localStorage.removeItem(STOPS_CACHE_KEY);
-      return null;
-    }
-
-    const stops = data.stops.filter(isCachedStop);
-    if (stops.length === 0) {
-      localStorage.removeItem(STOPS_CACHE_KEY);
-      return null;
-    }
-
-    return stops;
-  } catch {
-    return null;
-  }
+  return typeof route.gtfsId === 'string' && route.gtfsId.length > 0
+    && typeof route.shortName === 'string' && route.shortName.length > 0
+    && typeof route.longName === 'string'
+    && isTransportMode(route.mode);
 };
 
-export const setCachedStops = (stops: Stop[]): void => {
-  try {
-    const data: StopsCache = {
-      stops,
-      timestamp: Date.now(),
-    };
-    localStorage.setItem(STOPS_CACHE_KEY, JSON.stringify(data));
-  } catch {
-    // Ignore storage errors
-  }
+const isCachedStop = (stop: unknown): stop is Stop => {
+  if (!isRecord(stop)) return false;
+
+  return typeof stop.gtfsId === 'string' && stop.gtfsId.length > 0
+    && typeof stop.name === 'string' && stop.name.length > 0
+    && typeof stop.code === 'string'
+    && typeof stop.lat === 'number'
+    && typeof stop.lon === 'number'
+    && isTransportMode(stop.vehicleMode)
+    && Array.isArray(stop.routes)
+    && stop.routes.every(isCachedStopRoute);
+};
+
+const normalizeCachedStops = (value: unknown): Stop[] | null => {
+  if (!Array.isArray(value)) return null;
+
+  const stops = value.filter(isCachedStop);
+  return stops.length > 0 ? stops : null;
+};
+
+export const getCachedStopsSnapshot = (): CachedValue<Stop[]> | null => (
+  readTimedCacheValue(STOPS_CACHE_KEY, 'stops', normalizeCachedStops)
+);
+
+export const getCachedStops = async (): Promise<Stop[] | null> => (
+  (await readPersistentTimedCacheValue(STOPS_CACHE_KEY, 'stops', normalizeCachedStops))?.value ?? null
+);
+
+export const setCachedStops = async (stops: Stop[]): Promise<void> => {
+  await writePersistentTimedCacheValue(STOPS_CACHE_KEY, 'stops', stops);
+};
+
+// Cache route pattern geometry in browser storage
+const ROUTE_PATTERNS_CACHE_KEY = 'busmap-route-patterns-cache';
+
+const isCoordinate = (value: unknown): value is { lat: number; lon: number } => {
+  if (!isRecord(value)) return false;
+
+  return typeof value.lat === 'number' && typeof value.lon === 'number';
+};
+
+const isRoutePattern = (value: unknown): value is RoutePattern => {
+  if (!isRecord(value)) return false;
+
+  return typeof value.gtfsId === 'string' && value.gtfsId.length > 0
+    && typeof value.name === 'string'
+    && Array.isArray(value.geometry)
+    && value.geometry.every(isCoordinate);
+};
+
+const normalizeCachedRoutePatterns = (value: unknown): RoutePattern[] | null => {
+  if (!Array.isArray(value)) return null;
+  if (!value.every(isRoutePattern)) return null;
+
+  return value;
+};
+
+const getRoutePatternsCacheKey = (routeId: string): string => `${ROUTE_PATTERNS_CACHE_KEY}:${routeId}`;
+
+export const clearStaticApiCache = async (): Promise<void> => {
+  removeLocalStorageItem(ROUTES_CACHE_KEY);
+  removeLocalStorageItem(STOPS_CACHE_KEY);
+  removeLocalStorageItem(ROUTE_PATTERNS_CACHE_KEY);
+  removeLocalStorageItemsByPrefix(`${ROUTE_PATTERNS_CACHE_KEY}:`);
+  await deleteCacheStorage(STATIC_API_CACHE_NAME);
+};
+
+const getCachedRoutePatterns = async (routeIds: string[]): Promise<Map<string, RoutePattern[]>> => {
+  const patternsByRouteId = new Map<string, RoutePattern[]>();
+
+  await Promise.all(routeIds.map(async (routeId) => {
+    const cached = await readPersistentTimedCacheValue(
+      getRoutePatternsCacheKey(routeId),
+      'patterns',
+      normalizeCachedRoutePatterns
+    );
+    if (!cached) return;
+
+    patternsByRouteId.set(routeId, cached.value);
+  }));
+
+  return patternsByRouteId;
+};
+
+const setCachedRoutePatterns = async (patternsByRouteId: Map<string, RoutePattern[]>): Promise<void> => {
+  if (patternsByRouteId.size === 0) return;
+
+  await Promise.all(Array.from(patternsByRouteId, ([routeId, patterns]) => (
+    writePersistentTimedCacheValue(getRoutePatternsCacheKey(routeId), 'patterns', patterns)
+  )));
 };
 
 interface StopsResponse {

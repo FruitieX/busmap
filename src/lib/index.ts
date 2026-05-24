@@ -1,5 +1,5 @@
 export { mqttService } from './mqtt';
-export { fetchAllRoutes, fetchAllStops, fetchRoutesByIds, fetchRoutePatterns, fetchStopTimetable, fetchStopRoutes, isApiKeyConfigured, normalizeMode } from './api';
+export { clearStaticApiCache, fetchAllRoutes, fetchAllStops, fetchRoutesByIds, fetchRoutePatterns, fetchStopTimetable, fetchStopRoutes, isApiKeyConfigured, normalizeMode } from './api';
 export type { StopTimetableResult } from './api';
 export { useRoutes, useStops, useRoutePatterns, useStopTimetable } from './hooks';
 export { extrapolate, interpolateVehicle, pruneInterpolationStates } from './interpolation';
