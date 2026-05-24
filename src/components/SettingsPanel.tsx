@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useSettingsStore, useSubscriptionStore, useSubscribedStopStore } from '@/stores';
-import { clearStaticApiCache } from '@/lib';
+import { clearStaticApiCache, getDeployedAppVersionStatus } from '@/lib';
 import { MAP_STYLES } from '@/types';
 import type { MapStyle, RouteColorMode } from '@/types';
 
@@ -110,12 +110,26 @@ const SettingsPanelComponent = ({ isOpen, onClose }: SettingsPanelProps) => {
   }, [clearAllSubscriptions, clearAllStops, clearStaticApiQueryData]);
 
   const checkForUpdates = useCallback(async () => {
+    const showUpToDate = () => {
+      setUpdateStatus('up-to-date');
+      setTimeout(() => setUpdateStatus('idle'), 5000);
+    };
+
+    const settleDetectedUpdate = async () => {
+      const versionStatus = await getDeployedAppVersionStatus();
+      if (versionStatus === 'same') {
+        showUpToDate();
+        return;
+      }
+
+      setUpdateStatus('idle');
+    };
+
     setUpdateStatus('checking');
     try {
       const registration = await navigator.serviceWorker?.getRegistration();
       if (!registration) {
-        setUpdateStatus('up-to-date');
-        setTimeout(() => setUpdateStatus('idle'), 5000);
+        showUpToDate();
         return;
       }
 
@@ -123,14 +137,16 @@ const SettingsPanelComponent = ({ isOpen, onClose }: SettingsPanelProps) => {
 
       const watchInstallingWorker = (worker: ServiceWorker) => {
         updateFound = true;
-        // If already installed/activated, the toast will handle it
+        // If already installed/activated, decide whether it is a visible app update.
         if (worker.state === 'installed' || worker.state === 'activated') {
-          setUpdateStatus('idle');
+          void settleDetectedUpdate();
           return;
         }
         setUpdateStatus('updating');
         worker.addEventListener('statechange', () => {
-          if (worker.state === 'installed' || worker.state === 'activated' || worker.state === 'redundant') {
+          if (worker.state === 'installed' || worker.state === 'activated') {
+            void settleDetectedUpdate();
+          } else if (worker.state === 'redundant') {
             setUpdateStatus('idle');
           }
         });
@@ -150,11 +166,10 @@ const SettingsPanelComponent = ({ isOpen, onClose }: SettingsPanelProps) => {
         if (registration.installing) {
           watchInstallingWorker(registration.installing);
         } else if (registration.waiting) {
-          // Already installed and waiting — toast will appear
-          setUpdateStatus('idle');
+          // Already installed and waiting — decide whether the toast should appear.
+          void settleDetectedUpdate();
         } else {
-          setUpdateStatus('up-to-date');
-          setTimeout(() => setUpdateStatus('idle'), 5000);
+          showUpToDate();
         }
       }
     } catch {

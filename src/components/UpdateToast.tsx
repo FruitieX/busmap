@@ -1,11 +1,44 @@
+import { useEffect, useState } from 'react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { getDeployedAppVersionStatus } from '@/lib';
 
 export const UpdateToast = () => {
+  const [shouldShowRefreshPrompt, setShouldShowRefreshPrompt] = useState(false);
   const {
     needRefresh: [needRefresh, setNeedRefresh],
     updateServiceWorker,
   } = useRegisterSW();
+
+  useEffect(() => {
+    if (!needRefresh) {
+      setShouldShowRefreshPrompt(false);
+      return;
+    }
+
+    let isCurrentCheck = true;
+
+    const checkDeployedVersion = async () => {
+      const versionStatus = await getDeployedAppVersionStatus();
+      if (!isCurrentCheck) {
+        return;
+      }
+
+      if (versionStatus === 'same') {
+        setShouldShowRefreshPrompt(false);
+        setNeedRefresh(false);
+        return;
+      }
+
+      setShouldShowRefreshPrompt(true);
+    };
+
+    void checkDeployedVersion();
+
+    return () => {
+      isCurrentCheck = false;
+    };
+  }, [needRefresh, setNeedRefresh]);
 
   const handleReload = async () => {
     try {
@@ -35,7 +68,7 @@ export const UpdateToast = () => {
 
   return (
     <AnimatePresence>
-      {needRefresh && (
+      {needRefresh && shouldShowRefreshPrompt && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}

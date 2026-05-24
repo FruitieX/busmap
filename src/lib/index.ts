@@ -5,3 +5,5 @@ export { useRoutes, useStops, useRoutePatterns, useStopTimetable } from './hooks
 export { extrapolate, interpolateVehicle, pruneInterpolationStates } from './interpolation';
 export type { InterpolatedPosition } from './interpolation';
 export { getStopTermini, getUniqueRouteColor, getVehicleTerminusLabel, haversineDistance, resolveRouteColor } from './utils';
+export { APP_VERSION, fetchDeployedAppVersion, getDeployedAppVersionStatus } from './version';
+export type { DeployedAppVersionStatus } from './version';
