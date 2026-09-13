@@ -864,7 +864,7 @@ interface VehicleTripResponse {
     gtfsId: string;
     directionId: string;
     tripHeadsign: string | null;
-    stoptimes: Array<{
+    stoptimesForDate: Array<{
       stop: {
         gtfsId: string;
         name: string;
@@ -909,8 +909,8 @@ const getHelsinkiServiceDay = (operatingDay: string): number => {
   return noonUtc.getTime() / 1000 - localHour * 3600;
 };
 
-// Match an HFP vehicle to its scheduled trip so the vehicle detail view can
-// show the ordered stops, including the current and upcoming stops.
+// Match an HFP vehicle to its scheduled trip. The date-specific field is
+// required here: `stoptimes` returns the static schedule without live updates.
 export const fetchVehicleTrip = async (
   routeId: string,
   direction: 1 | 2,
@@ -931,7 +931,7 @@ export const fetchVehicleTrip = async (
       gtfsId
       directionId
       tripHeadsign
-      stoptimes {
+      stoptimesForDate(serviceDate: "${escapeGraphqlString(operatingDay)}") {
         serviceDay
         stop {
           gtfsId
@@ -960,7 +960,7 @@ export const fetchVehicleTrip = async (
     gtfsId: trip.gtfsId,
     directionId: Number(trip.directionId),
     headsign: trip.tripHeadsign ?? '',
-    stops: trip.stoptimes.flatMap((st) => {
+    stops: trip.stoptimesForDate.flatMap((st) => {
       if (!st?.stop) return [];
 
       return [{

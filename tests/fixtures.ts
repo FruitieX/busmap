@@ -112,7 +112,7 @@ export async function mockServices(page: Page) {
           : request.fulfill({ json: { data: { stop: { stoptimesWithoutPatterns: timetable } } } });
       }
       if (query.includes('fuzzyTrip')) return request.fulfill({ json: { data: { fuzzyTrip: {
-        gtfsId: 'HSL:fixture-trip', directionId: '0', tripHeadsign: 'Pasila', stoptimes,
+        gtfsId: 'HSL:fixture-trip', directionId: '0', tripHeadsign: 'Pasila', stoptimesForDate: stoptimes,
       } } } });
       if (/\bstops\s*\{/.test(query)) return request.fulfill({ json: { data: { stops } } });
       if (/\broutes[\s({]/.test(query)) return request.fulfill({ json: { data: { routes: [{
