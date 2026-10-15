@@ -121,6 +121,28 @@ test('search, route selection, saved-route persistence and theme survive reload'
   await expect(page.locator('html')).toHaveClass(/dark/);
 });
 
+test('a retired saved route does not block loading the other route lines', async ({ page }) => {
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem('seeded')) return;
+    sessionStorage.setItem('seeded', '1');
+    const saved = (gtfsId: string, shortName: string) => ({
+      gtfsId, shortName, longName: shortName, mode: 'bus', color: '#007ac9', subscribedAt: 1,
+    });
+    localStorage.setItem('busmap-subscriptions', JSON.stringify({
+      state: { subscribedRoutes: [saved('HSL:2551', '551'), saved('HSL:retired', '999')], nearbyBounds: null },
+      version: 1,
+    }));
+    localStorage.setItem('busmap-route-patterns-cache:HSL:1001', JSON.stringify({ patterns: [], timestamp: Date.now() }));
+  });
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(async () => {
+    const cache = await caches.open('busmap-static-api-cache-v1');
+    const cached = await cache.match(`/__busmap-api-cache/${encodeURIComponent('busmap-route-patterns-cache:HSL:2551')}`);
+    return cached ? (await cached.json()).patterns.length : 0;
+  })).toBe(1);
+  expect(await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('busmap-route-patterns-cache')))).toEqual([]);
+});
+
 test('failed timetable refresh retains cached departures and shows a warning', async ({ page, app }) => {
   await page.goto('/');
   await page.getByRole('region', { name: 'Live vehicles', exact: true }).getByText('Pasila', { exact: true }).click();

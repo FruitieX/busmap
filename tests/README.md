@@ -16,7 +16,8 @@ needed: CI builds with a dummy API key and tests intercept transit requests.
 - Desktop and mobile Chromium: production startup and worker loading; tap,
   keyboard and drag sheet controls; real MQTT decoding and numeric stop IDs;
   vehicle → stop → vehicle navigation; relative departure labels and unavailable
-  vehicles; search and saved-route/theme persistence; cached timetable failures;
+  vehicles; search and saved-route/theme persistence; retired saved routes not
+  blocking other route lines; cached timetable failures;
   service-worker activation and offline app-shell reload.
 - Location and compact details: nearest-stop departure previews and return navigation,
   permission-denied fallback, nearest upcoming trip stop, expandable trip/route

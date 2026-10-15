@@ -473,7 +473,7 @@ export const fetchAllRoutes = async (): Promise<Route[]> => {
 };
 
 interface RoutePatternResponse {
-  routes: Array<{
+  routes: Array<null | {
     gtfsId: string;
     shortName: string;
     patterns: Array<{
@@ -551,7 +551,10 @@ export const fetchRoutePatterns = async (routeIds: string[]): Promise<Map<string
 
   const result = new Map<string, RoutePattern[]>();
 
+  // Unknown or retired route IDs come back as null rows; one must not fail the whole batch.
   for (const route of data.routes) {
+    if (!route?.gtfsId || !Array.isArray(route.patterns)) continue;
+
     const patterns: RoutePattern[] = route.patterns.map((p) => ({
       gtfsId: route.gtfsId,
       name: p.name,
@@ -692,16 +695,29 @@ export const clearStaticApiCache = async (): Promise<void> => {
   await deleteCacheStorage(STATIC_API_CACHE_NAME);
 };
 
+// Route geometries can total megabytes, so they live only in CacheStorage. Copies in
+// localStorage (written by older versions) can exhaust its quota, which makes every
+// persisted store update throw, so drop them.
+let legacyRoutePatternsPurged = false;
+const purgeLegacyLocalRoutePatterns = (): void => {
+  if (legacyRoutePatternsPurged) return;
+  legacyRoutePatternsPurged = true;
+  removeLocalStorageItem(ROUTE_PATTERNS_CACHE_KEY);
+  removeLocalStorageItemsByPrefix(`${ROUTE_PATTERNS_CACHE_KEY}:`);
+};
+
 const getCachedRoutePatterns = async (routeIds: string[]): Promise<Map<string, RoutePattern[]>> => {
+  purgeLegacyLocalRoutePatterns();
   const patternsByRouteId = new Map<string, RoutePattern[]>();
 
   await Promise.all(routeIds.map(async (routeId) => {
-    const cached = await readPersistentTimedCacheValue(
-      getRoutePatternsCacheKey(routeId),
-      'patterns',
-      normalizeCachedRoutePatterns
-    );
-    if (!cached) return;
+    const key = getRoutePatternsCacheKey(routeId);
+    const cachedPayload = await readCacheStorageItem(key);
+    const cached = normalizeTimedCachePayload(cachedPayload, 'patterns', normalizeCachedRoutePatterns);
+    if (!cached) {
+      if (cachedPayload !== null) await removeCacheStorageItem(key);
+      return;
+    }
 
     patternsByRouteId.set(routeId, cached.value);
   }));
@@ -712,9 +728,11 @@ const getCachedRoutePatterns = async (routeIds: string[]): Promise<Map<string, R
 const setCachedRoutePatterns = async (patternsByRouteId: Map<string, RoutePattern[]>): Promise<void> => {
   if (patternsByRouteId.size === 0) return;
 
-  await Promise.all(Array.from(patternsByRouteId, ([routeId, patterns]) => (
-    writePersistentTimedCacheValue(getRoutePatternsCacheKey(routeId), 'patterns', patterns)
-  )));
+  const timestamp = Date.now();
+  await Promise.all(Array.from(patternsByRouteId, async ([routeId, patterns]) => {
+    const serialized = stringifyJson({ patterns, timestamp });
+    if (serialized) await writeCacheStorageItem(getRoutePatternsCacheKey(routeId), serialized);
+  }));
 };
 
 interface StopsResponse {

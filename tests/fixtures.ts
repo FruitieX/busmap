@@ -117,7 +117,7 @@ export async function mockServices(page: Page) {
       if (/\bstops\s*\{/.test(query)) return request.fulfill({ json: { data: { stops } } });
       if (/\broutes[\s({]/.test(query)) return request.fulfill({ json: { data: { routes: [{
         ...route, patterns: [{ name: 'Westend - Pasila', geometry: stops.map(({ lat, lon }) => ({ lat, lon })) }],
-      }] } } });
+      }, ...(query.includes('"HSL:retired"') ? [null] : [])] } } });
     }
     unexpectedRequests.push(`${request.request().method()} ${url.origin}${url.pathname}`);
     return request.abort();
