@@ -1,8 +1,5 @@
+# busmap.netlify.app only redirects to https://busmap.fruitiex.org (see
+# deploy/netlify-redirect). Nothing is built, so deploys need no build minutes.
 [build]
-  # A failing test exits the build before Netlify can publish dist.
-  command = "npm run ci:deploy"
-  publish = "dist"
-
-[build.environment]
-  NODE_VERSION = "24.20.0"
-  CI = "true"
+  command = ""
+  publish = "deploy/netlify-redirect"

@@ -1,0 +1,4 @@
+# busmap.netlify.app only redirects to busmap.fruitiex.org now. Deploy this folder
+# manually (no build minutes); Git builds are stopped in the Netlify site settings.
+# sw.js is served from this folder so installed clients pick up the kill switch.
+/*  https://busmap.fruitiex.org/:splat  301
