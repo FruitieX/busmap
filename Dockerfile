@@ -1,5 +1,5 @@
-# Self-hosted build of busmap (the private busmap.fruitiex.org deployment).
-# The public site is still built and served by Netlify.
+# Self-hosted build of busmap, served at busmap.fruitiex.org.
+# busmap.netlify.app only redirects here (see deploy/netlify-redirect).
 FROM node:24.22.0-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
