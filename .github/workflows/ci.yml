@@ -57,12 +57,26 @@ jobs:
 
   image:
     name: Container image
-    # Publishing happens in container.yml on master; PRs (incl. Renovate base-image bumps)
-    # only verify that the image builds and serves the app.
-    if: github.event_name == 'pull_request'
+    # PRs (incl. Renovate base-image bumps) verify that the image builds and serves the app.
+    # On master the image is published and deployed only after the checks pass.
+    needs: checks
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PUBLISH: ${{ github.event_name == 'push' }}
+      HAS_API_KEY: ${{ secrets.VITE_DIGITRANSIT_API_KEY != '' }}
+      HAS_DISPATCH_TOKEN: ${{ secrets.HOMELAB_DISPATCH_TOKEN != '' }}
     steps:
+      - name: Require the Digitransit API key for publishing
+        if: env.PUBLISH == 'true' && env.HAS_API_KEY != 'true'
+        run: |
+          echo "::error::Set the VITE_DIGITRANSIT_API_KEY repository secret to publish the self-hosted image."
+          exit 1
+
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -73,16 +87,48 @@ jobs:
         with:
           context: .
           load: true
-          push: false
           tags: busmap:ci
           secrets: |
-            digitransit_api_key=ci-fixture-key
+            digitransit_api_key=${{ env.PUBLISH == 'true' && secrets.VITE_DIGITRANSIT_API_KEY || 'ci-fixture-key' }}
           cache-from: type=gha
+          cache-to: ${{ env.PUBLISH == 'true' && 'type=gha,mode=max' || '' }}
 
       - name: Smoke test image
         run: |
           docker run -d --rm -p 8080:8080 --name busmap busmap:ci
-          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8080/ -o index.html && break; sleep 1; done
+          for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:8080/ -o index.html && break; sleep 1; done
           grep -q '<title>busmap</title>' index.html
           curl -fsS http://127.0.0.1:8080/app-version.json
           curl -fsS -o /dev/null http://127.0.0.1:8080/sw.js
+          docker stop busmap
+
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        if: env.PUBLISH == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish image
+        id: publish
+        if: env.PUBLISH == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/fruitiex/busmap:main
+            ghcr.io/fruitiex/busmap:${{ github.sha }}
+          secrets: |
+            digitransit_api_key=${{ secrets.VITE_DIGITRANSIT_API_KEY }}
+          cache-from: type=gha
+
+      - name: Deploy to homelab
+        if: env.PUBLISH == 'true' && env.HAS_DISPATCH_TOKEN == 'true'
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
+        with:
+          token: ${{ secrets.HOMELAB_DISPATCH_TOKEN }}
+          repository: FruitieX/homelab
+          event-type: image-update
+          client-payload: |
+            {"image": "ghcr.io/fruitiex/busmap", "digest": "${{ steps.publish.outputs.digest }}", "revision": "${{ github.sha }}"}
