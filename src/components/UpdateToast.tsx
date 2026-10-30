@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'motion/react';
 import { getDeployedAppVersionStatus } from '@/lib';
 
 export const UpdateToast = () => {
@@ -10,11 +10,13 @@ export const UpdateToast = () => {
     updateServiceWorker,
   } = useRegisterSW();
 
+  // Hide the prompt as soon as no refresh is pending (adjusting state during render)
+  if (!needRefresh && shouldShowRefreshPrompt) {
+    setShouldShowRefreshPrompt(false);
+  }
+
   useEffect(() => {
-    if (!needRefresh) {
-      setShouldShowRefreshPrompt(false);
-      return;
-    }
+    if (!needRefresh) return;
 
     let isCurrentCheck = true;
 

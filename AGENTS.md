@@ -59,8 +59,9 @@ Requires `VITE_DIGITRANSIT_API_KEY` in `.env` (register at https://portal-api.di
 - **Barrel exports:** `src/components/index.ts` and `src/lib/index.ts` re-export public APIs
 - **Transport modes:** Always use `normalizeMode()` from `api.ts` when handling mode strings from the API (maps `subway`→`metro`, `rail`→`train`, etc.)
 - **Colors:** Use `TRANSPORT_COLORS` from `types.ts` for mode-based coloring
-- **Styling:** Tailwind CSS with `dark:` variant; theme applied via `document.documentElement.classList`
-- **Tests:** Playwright Test in `tests/`, running against the production build. Mock services at HTTP/WebSocket boundaries, never replace application stores or components. Run `npm run ci:build` before `npm test`; install Chromium with `npx playwright install --with-deps chromium`.
+- **Styling:** Tailwind CSS v4, configured CSS-first in `src/index.css` (`@theme`) via `@tailwindcss/vite`; `dark:` variant is class-based, theme applied via `document.documentElement.classList`
+- **TypeScript:** `tsc` is TypeScript 7 (`@typescript/native` alias). `typescript` is aliased to `@typescript/typescript6` because typescript-eslint needs the TS 6 compiler API; drop the alias once typescript-eslint supports TS 7
+- **Tests:** Playwright Test in `tests/`, running against the production build. Mock services at HTTP/WebSocket boundaries, never replace application stores or components. Browser tests fail on any `console.error`; tests that simulate failures declare expected ones with `app.expectConsoleErrors(/pattern/)`. On NixOS, run them with `SMOKE_CHROMIUM_PATH` pointing at nixpkgs' `playwright-driver.browsers` Chromium. Run `npm run ci:build` before `npm test`; install Chromium with `npx playwright install --with-deps chromium`.
 
 ## Patterns to Follow
 

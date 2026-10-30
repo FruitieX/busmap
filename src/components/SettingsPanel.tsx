@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'motion/react';
 import { useSettingsStore, useSubscriptionStore, useSubscribedStopStore } from '@/stores';
 import { clearStaticApiCache, getDeployedAppVersionStatus } from '@/lib';
 import { MAP_STYLES } from '@/types';

@@ -1,5 +1,5 @@
 import { memo, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'motion/react';
 import type { Stop } from '@/types';
 import { TRANSPORT_COLORS } from '@/types';
 import { useStopStore, useSubscribedStopStore, useSettingsStore, useLocationStore } from '@/stores';
@@ -49,7 +49,7 @@ const StopCard = memo(({ stop, isSelected, isSubscribed, onCardClick, onSubscrip
 
   return (
     <div
-      className={`bg-gray-50 dark:bg-gray-800 rounded-xl p-2 min-[425px]:p-3 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-150 ${isSelected ? 'outline outline-2 outline-primary-500' : ''}`}
+      className={`bg-gray-50 dark:bg-gray-800 rounded-xl p-2 min-[425px]:p-3 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-150 ${isSelected ? 'outline-solid outline-2 outline-primary-500' : ''}`}
       onClick={onCardClick}
     >
       <div className="flex items-center gap-3">
@@ -96,7 +96,7 @@ const StopCard = memo(({ stop, isSelected, isSubscribed, onCardClick, onSubscrip
               return (
                 <span
                   key={shortName}
-                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold border"
+                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-sm text-[10px] font-semibold border"
                   style={{ color: badgeColor, borderColor: badgeColor }}
                 >
                   {shortName}
@@ -104,7 +104,7 @@ const StopCard = memo(({ stop, isSelected, isSubscribed, onCardClick, onSubscrip
               );
             })}
             {routeLabels.length > 8 && (
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium text-gray-500 dark:text-gray-400 bg-gray-200 dark:bg-gray-700">
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium text-gray-500 dark:text-gray-400 bg-gray-200 dark:bg-gray-700">
                 +{routeLabels.length - 8}
               </span>
             )}

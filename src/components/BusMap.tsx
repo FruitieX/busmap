@@ -1,4 +1,4 @@
-import { useRef, useCallback, useMemo, memo, useEffect, useState } from 'react';
+import { useRef, useCallback, useMemo, memo, useEffect, useLayoutEffect, useState } from 'react';
 import Map, { Marker, Source, Layer, AttributionControl } from 'react-map-gl/maplibre';
 import type { LineLayerSpecification, CircleLayerSpecification, SymbolLayerSpecification, MapRef, ViewStateChangeEvent, MapLayerMouseEvent } from 'react-map-gl/maplibre';
 import { useLocationStore, useVehicleStore, useSubscriptionStore, useSettingsStore, useStopStore, useSubscribedStopStore } from '@/stores';
@@ -400,7 +400,6 @@ const BusMapComponent = ({ patterns, onVehicleClick, nearbyRadius, selectedVehic
   const animateVehicles = useSettingsStore((state) => state.animateVehicles);
   const rafRef = useRef<number>(0);
   const vehiclesRef = useRef<TrackedVehicle[]>(vehicles);
-  vehiclesRef.current = vehicles;
 
   // Add composite marker image (arrow + circle) for a specific color + subscribed variant
   const addMarkerImage = useCallback((color: string, isSubscribed: boolean) => {
@@ -436,25 +435,20 @@ const BusMapComponent = ({ patterns, onVehicleClick, nearbyRadius, selectedVehic
     };
   }, [handleStyleLoad]);
 
-  // Track selected vehicle ID in ref for rAF loop
+  // Latest props for the rAF loop, which outlives individual renders
   const selectedVehicleIdRef = useRef<string | null | undefined>(selectedVehicleId);
-  selectedVehicleIdRef.current = selectedVehicleId;
-
-  // Track selected route ID in ref for rAF loop
   const selectedRouteIdRef = useRef<string | null | undefined>(selectedRouteId);
-  selectedRouteIdRef.current = selectedRouteId;
-
-  // Track selected stop route IDs in ref for rAF loop
   const selectedStopRouteIdsRef = useRef<Set<string>>(selectedStopRouteIds);
-  selectedStopRouteIdsRef.current = selectedStopRouteIds;
-
-  // Track selected stop directions in ref for rAF loop
   const selectedStopDirectionsRef = useRef<Record<string, number[]>>(selectedStopDirections);
-  selectedStopDirectionsRef.current = selectedStopDirections;
-
-  // Track image-adding callbacks in ref for rAF loop access
   const addMarkerImageRef = useRef(addMarkerImage);
-  addMarkerImageRef.current = addMarkerImage;
+  useLayoutEffect(() => {
+    vehiclesRef.current = vehicles;
+    selectedVehicleIdRef.current = selectedVehicleId;
+    selectedRouteIdRef.current = selectedRouteId;
+    selectedStopRouteIdsRef.current = selectedStopRouteIds;
+    selectedStopDirectionsRef.current = selectedStopDirections;
+    addMarkerImageRef.current = addMarkerImage;
+  });
 
   useEffect(() => {
     const PING_DURATION_MS = 750; // Duration of ping animation after update (matches typical 1s update rate)
@@ -568,7 +562,7 @@ const BusMapComponent = ({ patterns, onVehicleClick, nearbyRadius, selectedVehic
 
         // Animate selection scale
         let animState = selectionAnimState[vehicle.vehicleId];
-        let selectionScale = 1;
+        let selectionScale: number;
         if (animState) {
           if (animState.selected !== isSelected) {
             // Selection state changed, start new animation
@@ -666,17 +660,27 @@ const BusMapComponent = ({ patterns, onVehicleClick, nearbyRadius, selectedVehic
   const isProgrammaticMoveRef = useRef(false);
 
   // Whether the map is actively auto-following the selected vehicle
+  // The ref mirrors the state for interval/event callbacks; both are always set together.
   const [isFollowingVehicle, setIsFollowingVehicle] = useState(true);
   const isFollowingVehicleRef = useRef(true);
-  isFollowingVehicleRef.current = isFollowingVehicle;
 
   // Whether the user has panned away from the fitted route bounds
   const [hasMovedFromRoute, setHasMovedFromRoute] = useState(false);
   const [hasMovedFromStop, setHasMovedFromStop] = useState(false);
 
-  useEffect(() => {
+  // Reset per-selection camera state when the selection changes (adjusting state during render,
+  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes)
+  const selectedStopId = selectedStop?.gtfsId;
+  const [prevSelectedStopId, setPrevSelectedStopId] = useState(selectedStopId);
+  if (prevSelectedStopId !== selectedStopId) {
+    setPrevSelectedStopId(selectedStopId);
     setHasMovedFromStop(false);
-  }, [selectedStop?.gtfsId]);
+  }
+  const [prevSelectedVehicleId, setPrevSelectedVehicleId] = useState(selectedVehicleId);
+  if (prevSelectedVehicleId !== selectedVehicleId) {
+    setPrevSelectedVehicleId(selectedVehicleId);
+    if (selectedVehicleId) setIsFollowingVehicle(true);
+  }
 
   // Handle pending flyTo animations with padding for bottom sheet
   useEffect(() => {
@@ -718,13 +722,14 @@ const BusMapComponent = ({ patterns, onVehicleClick, nearbyRadius, selectedVehic
 
   // Store selected vehicle in ref for interval access
   const selectedVehicleRef = useRef<TrackedVehicle | null>(selectedVehicle);
-  selectedVehicleRef.current = selectedVehicle;
+  useLayoutEffect(() => {
+    selectedVehicleRef.current = selectedVehicle;
+  });
 
   useEffect(() => {
     if (!selectedVehicleId) return;
 
-    // Reset following state when a new vehicle is selected
-    setIsFollowingVehicle(true);
+    // Following state is reset during render when a new vehicle is selected
     isFollowingVehicleRef.current = true;
 
     // Interval to keep vehicle centered - runs every second
@@ -1220,11 +1225,17 @@ const BusMapComponent = ({ patterns, onVehicleClick, nearbyRadius, selectedVehic
     setTimeout(() => { isAnimatingRef.current = false; }, 1000);
   }, [selectedVehicle?.vehicleId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fit bounds when route is selected
+  // Fit bounds when route is selected. Each refit resets the moved-away state
+  // (adjusted during render rather than in the effect).
+  // (fitRouteBounds changes exactly when bottomPadding does.)
+  const [prevRouteFit, setPrevRouteFit] = useState({ selectedRouteId, patterns, bottomPadding });
+  if (prevRouteFit.selectedRouteId !== selectedRouteId || prevRouteFit.patterns !== patterns
+      || prevRouteFit.bottomPadding !== bottomPadding) {
+    setPrevRouteFit({ selectedRouteId, patterns, bottomPadding });
+    if (selectedRouteId && patterns) setHasMovedFromRoute(false);
+  }
   useEffect(() => {
     if (!selectedRouteId || !patterns) return;
-
-    setHasMovedFromRoute(false);
 
     const routePatterns = patterns.get(selectedRouteId);
     if (routePatterns && routePatterns.length > 0) {

@@ -1,5 +1,5 @@
 import { useRef, useCallback, useEffect, useState, type ReactNode } from 'react';
-import { motion, useMotionValue, useTransform, useDragControls, animate, type MotionValue } from 'framer-motion';
+import { motion, useMotionValue, useTransform, useDragControls, animate, type MotionValue } from 'motion/react';
 import {
   SHEET_MIN_HEIGHT,
   SHEET_MAX_HEIGHT,
@@ -136,7 +136,7 @@ export const BottomSheet = ({
         type="button"
         aria-label={`Sheet ${sizeLabel}. Change sheet size`}
         title="Tap to resize, or drag"
-        className="flex justify-center items-center min-h-8 shrink-0 cursor-grab active:cursor-grabbing touch-none rounded-t-2xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-500"
+        className="flex justify-center items-center min-h-8 shrink-0 cursor-grab active:cursor-grabbing touch-none rounded-t-2xl focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-primary-500"
         onPointerDown={startDrag}
         onClick={() => {
           if (draggedRef.current) { draggedRef.current = false; return; }

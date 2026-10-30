@@ -1,10 +1,10 @@
 import { DetailHeader, DistanceFromYou, detailActionClass } from './DetailLayout';
 import { DetailBackButton } from './DetailBackButton';
-import { memo, useMemo, useEffect, useState } from 'react';
+import { memo, useMemo, useEffect } from 'react';
 import type { Route, Stop, StopDeparture } from '@/types';
 import { TRANSPORT_COLORS } from '@/types';
 import { useStopStore, useSubscribedStopStore, useVehicleStore } from '@/stores';
-import { useStopTimetable, getStopTermini, computeAllDepartureCountdowns } from '@/lib';
+import { useNow, useStopTimetable, getStopTermini, computeAllDepartureCountdowns } from '@/lib';
 import { StarIcon } from './StarToggleButton';
 
 interface StopDetailsProps {
@@ -65,7 +65,7 @@ const DepartureCard = memo(({ departure, onClick, vehicleOnMap, countdown, now, 
     <button
       type="button"
       disabled={isCanceled || !vehicleOnMap}
-      className={`w-full text-left bg-gray-50 dark:bg-gray-800 rounded-xl p-2 min-[425px]:p-3 enabled:hover:bg-gray-100 dark:enabled:hover:bg-gray-700 disabled:cursor-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-500 transition-all duration-150 ${isCanceled ? 'opacity-50' : ''}`}
+      className={`w-full text-left bg-gray-50 dark:bg-gray-800 rounded-xl p-2 min-[425px]:p-3 enabled:hover:bg-gray-100 dark:enabled:hover:bg-gray-700 disabled:cursor-default focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-primary-500 transition-all duration-150 ${isCanceled ? 'opacity-50' : ''}`}
       onClick={onClick}
     >
       <div className="flex items-center gap-3">
@@ -109,12 +109,9 @@ DepartureCard.displayName = 'DepartureCard';
 const StopDetailsComponent = ({ stop, onBack, onDepartureClick, onReCenter, onRouteActivate, backTitle = 'Back to stops' }: StopDetailsProps) => {
   const setStopDirections = useStopStore((state) => state.setStopDirections);
   const { data: timetable, isLoading, isError, refetch, dataUpdatedAt, fetchStatus } = useStopTimetable(stop.gtfsId);
-  const [now, setNow] = useState(Date.now());
+  const now = useNow(1000);
   const updatesUnavailable = isError || fetchStatus === 'paused' || now - dataUpdatedAt > 90_000;
-  useEffect(() => {
-    const interval = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(interval);
-  }, []);
+  const departures = timetable?.departures;
 
   const isSubscribed = useSubscribedStopStore((state) => state.isStopSubscribed(stop.gtfsId));
   const subscribeToStop = useSubscribedStopStore((state) => state.subscribeToStop);
@@ -157,28 +154,28 @@ const StopDetailsComponent = ({ stop, onBack, onDepartureClick, onReCenter, onRo
       return stop.headsigns.join(', ');
     }
     // Then try departure headsigns from timetable
-    if (timetable?.departures.length) {
+    if (departures?.length) {
       const headsigns = new Set<string>();
-      for (const d of timetable.departures) {
+      for (const d of departures) {
         if (d.headsign) headsigns.add(d.headsign);
       }
       if (headsigns.size > 0) return Array.from(headsigns).join(', ');
     }
     // Fall back to route longNames
     return getStopTermini(stop.routes);
-  }, [stop.headsigns, stop.routes, timetable?.departures]);
+  }, [stop.headsigns, stop.routes, departures]);
 
   // Match timetable rows to live vehicles.
   const vehiclesMap = useVehicleStore((state) => state.vehicles);
 
   // Filter out past departures and canceled ones at the top
   const sortedDepartures = useMemo(() => {
-    if (!timetable?.departures) return [];
-    return timetable.departures.filter((d) => {
+    if (!departures) return [];
+    return departures.filter((d) => {
       const minutesUntil = getMinutesUntil(d.serviceDay, d.realtimeDeparture, now);
       return minutesUntil >= -1; // Show departures from 1 min ago onward
     });
-  }, [timetable?.departures, now]);
+  }, [departures, now]);
 
   const countdowns = useMemo(() => computeAllDepartureCountdowns(
     sortedDepartures, vehiclesMap, stop.lat, stop.lon,

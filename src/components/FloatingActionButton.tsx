@@ -1,5 +1,5 @@
 import { memo, type ReactNode } from 'react';
-import { motion } from 'framer-motion';
+import { motion } from 'motion/react';
 
 interface FloatingActionButtonProps {
   icon: ReactNode;

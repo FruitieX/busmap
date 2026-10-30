@@ -1,9 +1,9 @@
 import { DetailHeader, detailActionClass } from './DetailLayout';
 import { DetailBackButton } from './DetailBackButton';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { Route, Stop, TrackedVehicle, VehicleTripStop } from '@/types';
 import { useLocationStore, useSettingsStore, useSubscriptionStore } from '@/stores';
-import { haversineDistance, resolveRouteColor, useVehicleTrip } from '@/lib';
+import { haversineDistance, resolveRouteColor, useNow, useVehicleTrip } from '@/lib';
 import { DELAY_EARLY_THRESHOLD, DELAY_LATE_THRESHOLD, MPS_TO_KMPH, getVehicleTiming } from '@/constants';
 import { StarIcon } from './StarToggleButton';
 
@@ -92,16 +92,11 @@ export const VehicleDetails = ({
   const subscribedRoutes = useSubscriptionStore((state) => state.subscribedRoutes);
   const developerMode = useSettingsStore((state) => state.developerMode);
   const routeColorMode = useSettingsStore((state) => state.routeColorMode);
-  const [now, setNow] = useState(Date.now());
+  const now = useNow(1000);
   const [showAllStops, setShowAllStops] = useState(false);
   const userLocation = useLocationStore((state) => state.userLocation);
   const isStale = now - vehicle.lastUpdate >= getVehicleTiming(vehicle.mode).fadeEndMs;
   const { data: vehicleTrip, isLoading: isTripLoading, isError: isTripError } = useVehicleTrip(vehicle);
-
-  useEffect(() => {
-    const interval = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(interval);
-  }, []);
 
   const subscribed = subscribedRoutes.find(
     (route) => route.gtfsId === `HSL:${vehicle.routeId}` || route.shortName === vehicle.routeShortName,
@@ -226,7 +221,7 @@ export const VehicleDetails = ({
                   key={`${stop.gtfsId}-${stop.stopPosition}`}
                   onClick={() => onStopClick({ ...stop, vehicleMode: vehicle.mode, routes: [route] })}
                   aria-label={`Show ${stop.name} on map`}
-                  className={`w-full text-left flex items-center gap-3 px-3 py-3 hover:bg-gray-100 dark:hover:bg-gray-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-500 ${status === 'next' ? 'bg-primary-50 dark:bg-primary-900' : ''} ${isCanceled || isPast ? 'opacity-60 hover:opacity-100 focus-visible:opacity-100' : ''}`}
+                  className={`w-full text-left flex items-center gap-3 px-3 py-3 hover:bg-gray-100 dark:hover:bg-gray-700 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-primary-500 ${status === 'next' ? 'bg-primary-50 dark:bg-primary-900' : ''} ${isCanceled || isPast ? 'opacity-60 hover:opacity-100 focus-visible:opacity-100' : ''}`}
                 >
                   <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${status === 'next' ? 'bg-primary-500 ring-4 ring-primary-100 dark:ring-primary-900' : 'border border-gray-400'}`} />
                   <div className="min-w-0 flex-1">

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import {
   fetchAllRoutes,
@@ -104,4 +105,14 @@ export const useVehicleTrip = (vehicle: TrackedVehicle | null) => {
     refetchInterval: 1000 * 30,
     refetchOnWindowFocus: true,
   });
+};
+
+/** Current time in ms, refreshed every `intervalMs`. */
+export const useNow = (intervalMs: number): number => {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(timer);
+  }, [intervalMs]);
+  return now;
 };

@@ -88,7 +88,7 @@ const VehicleCard = memo(
 
     return (
       <div
-        className={`bg-gray-50 dark:bg-gray-800 rounded-xl p-2 min-[425px]:p-3 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-150 ${isSelected ? 'outline outline-2 outline-primary-500' : ''}`}
+        className={`bg-gray-50 dark:bg-gray-800 rounded-xl p-2 min-[425px]:p-3 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-150 ${isSelected ? 'outline-solid outline-2 outline-primary-500' : ''}`}
         onClick={onCardClick}
       >
         <div className="flex items-center gap-3">

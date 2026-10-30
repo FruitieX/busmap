@@ -1,5 +1,5 @@
 import { memo, useState, useCallback, useRef, useEffect, useMemo, type CSSProperties } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'motion/react';
 import { useVehicleStore, useSubscriptionStore, useSubscribedStopStore, useSettingsStore } from '@/stores';
 import { useRoutes, getStopTermini, normalizeMode, resolveRouteColor } from '@/lib';
 import type { Route, TransportMode, Stop, StopRoute } from '@/types';
@@ -57,9 +57,9 @@ const getActiveFilterStyle = (color: string): CSSProperties => ({
 
 const FilterChip = ({ active, color, label, onClick }: FilterChipProps) => (
   <button
-    className={`inline-flex h-8 shrink-0 items-center gap-2 rounded-full border px-3 text-sm font-medium whitespace-nowrap transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-900 ${
+    className={`inline-flex h-8 shrink-0 items-center gap-2 rounded-full border px-3 text-sm font-medium whitespace-nowrap transition-all focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-900 ${
       active
-        ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-800 dark:text-white'
+        ? 'bg-white text-gray-900 shadow-xs dark:bg-gray-800 dark:text-white'
         : 'border-gray-200/70 bg-gray-100/80 text-gray-500 hover:border-gray-300 hover:bg-gray-200/80 hover:text-gray-700 dark:border-gray-700/70 dark:bg-gray-800/70 dark:text-gray-400 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-200'
     }`}
     style={active ? getActiveFilterStyle(color) : undefined}
@@ -319,10 +319,12 @@ const StatusBarComponent = ({ onActivateRoute, onToggleRouteSubscription, stops,
     return items.slice(0, 50);
   }, [search, normalizedRoutes, searchableStops, activeFilters, showRoutes, showStops, routeDistanceMap]);
 
-  // Reset selection when results change
-  useEffect(() => {
+  // Reset selection when the query changes (adjusting state during render)
+  const [prevQuery, setPrevQuery] = useState({ search, activeFilters });
+  if (prevQuery.search !== search || prevQuery.activeFilters !== activeFilters) {
+    setPrevQuery({ search, activeFilters });
     setSelectedIndex(0);
-  }, [search, activeFilters]);
+  }
 
   // Available modes in the data
   const availableModes = useMemo(() => {
@@ -443,7 +445,7 @@ const StatusBarComponent = ({ onActivateRoute, onToggleRouteSubscription, stops,
       transition={{ delay: 0.2 }}
     >
       <div className="mx-4 mt-2 pointer-events-auto" ref={containerRef}>
-        <div className="bg-white/90 dark:bg-gray-900/90 backdrop-blur-sm rounded-xl shadow-float px-4 py-2">
+        <div className="bg-white/90 dark:bg-gray-900/90 backdrop-blur-xs rounded-xl shadow-float px-4 py-2">
           <div className="flex items-center justify-between">
             {/* Connection status / Search */}
             {isSearching ? (
@@ -455,7 +457,7 @@ const StatusBarComponent = ({ onActivateRoute, onToggleRouteSubscription, stops,
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  className="flex-1 bg-transparent text-gray-900 dark:text-white placeholder-gray-500 focus:outline-none text-sm cursor-text"
+                  className="flex-1 bg-transparent text-gray-900 dark:text-white placeholder-gray-500 focus:outline-hidden text-sm cursor-text"
                 />
                 <button
                   className="shrink-0 w-6 h-6 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center justify-center"

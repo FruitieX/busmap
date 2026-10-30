@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { radiusToZoom } from './stores/locationStore';
-import { motion, AnimatePresence, useMotionValue, useTransform, type MotionValue } from 'framer-motion';
+import { motion, AnimatePresence, useMotionValue, useTransform, type MotionValue } from 'motion/react';
 import {
   BusMap,
   VehicleList,
@@ -93,6 +93,7 @@ const isSameSheetHistoryEntry = (a: SheetHistoryEntry, b: SheetHistoryEntry): bo
 };
 
 const TAB_STORAGE_KEY = 'busmap-active-tab';
+const STABLE_THRESHOLD_DEG = 0.0015; // ~150m
 
 type StopWithOptionalDistance = Stop & { distance?: number };
 type StopWithDistance = Stop & { distance: number };
@@ -123,6 +124,40 @@ const saveTab = (tab: SheetTab) => {
   } catch { /* ignore */ }
 };
 
+const findSelectedRoute = (
+  selectedRouteId: string | null,
+  subscribedRoutes: SubscribedRoute[],
+  stopsForSearch: StopWithOptionalDistance[],
+  vehicles: TrackedVehicle[],
+  activatedRoute: Route | null,
+): Route | SubscribedRoute | null => {
+  if (!selectedRouteId) return null;
+
+  const subscribed = subscribedRoutes.find((route) => route.gtfsId === selectedRouteId);
+  if (subscribed) return subscribed;
+
+  for (const stop of stopsForSearch) {
+    const stopRoute = stop.routes.find((route) => route.gtfsId === selectedRouteId);
+    if (stopRoute) return { ...stopRoute };
+  }
+
+  const vehicle = vehicles.find((v) => `HSL:${v.routeId}` === selectedRouteId);
+  if (vehicle) {
+    return {
+      gtfsId: selectedRouteId,
+      shortName: vehicle.routeShortName,
+      longName: vehicle.headsign,
+      mode: vehicle.mode,
+    };
+  }
+
+  if (activatedRoute?.gtfsId === selectedRouteId) {
+    return activatedRoute;
+  }
+
+  return null;
+};
+
 const App = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<SheetTab>(loadSavedTab);
@@ -131,7 +166,7 @@ const App = () => {
   const [activatedRoute, setActivatedRoute] = useState<Route | null>(null);
   const [sheetHeight, setSheetHeight] = useState(() => useSettingsStore.getState().sheetHeight);
   const setPersistedSheetHeight = useSettingsStore((state) => state.setSheetHeight);
-  const sheetPersistTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const sheetPersistTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const [nearbyMenuOpen, setNearbyMenuOpen] = useState(false);
   const nearbyMenuRef = useRef<HTMLDivElement>(null);
   const nearbyBtnRef = useRef<HTMLButtonElement>(null);
@@ -145,13 +180,12 @@ const App = () => {
   const expandSheetRef = useRef<(() => void) | null>(null);
   const sheetContentRef = useRef<HTMLDivElement>(null);
   const stopListScrollRef = useRef(0);
-  const sheetHistoryRef = useRef<SheetHistoryEntry[]>([]);
+  const [sheetHistory, setSheetHistory] = useState<SheetHistoryEntry[]>([]);
 
   // Motion-value-driven button position (no React re-render lag)
   const fallbackHeight = useMotionValue(sheetHeight);
-  const sheetHeightMV = useRef<MotionValue<number>>(fallbackHeight);
-  const handleHeightMV = useCallback((mv: MotionValue<number>) => { sheetHeightMV.current = mv; }, []);
-  const fabBottom = useTransform(sheetHeightMV.current, (h: number) => h + 16);
+  const [sheetHeightMV, setSheetHeightMV] = useState<MotionValue<number>>(fallbackHeight);
+  const fabBottom = useTransform(sheetHeightMV, (h: number) => h + 16);
 
   const switchTab = useCallback((tab: SheetTab) => {
     if (sheetHeight < SHEET_EXPAND_THRESHOLD) {
@@ -190,7 +224,7 @@ const App = () => {
 
   // Debounce nearby radius changes (wait 500ms after user stops sliding)
   const [debouncedRadius, setDebouncedRadius] = useState(nearbyRadius);
-  const radiusTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const radiusTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => {
     radiusTimeoutRef.current = setTimeout(() => {
       setDebouncedRadius(nearbyRadius);
@@ -203,7 +237,7 @@ const App = () => {
   const vehicles = useMemo(() => Array.from(vehiclesMap.values()), [vehiclesMap]);
   const selectedVehicle = selectedVehicleId ? vehiclesMap.get(selectedVehicleId) ?? null : null;
   const selectedVehicleRouteId = selectedVehicle?.routeId;
-  const previousView = sheetHistoryRef.current.at(-1);
+  const previousView = sheetHistory.at(-1);
   const previousViewLabel = previousView?.tab === 'vehicles'
     ? previousView.vehicleId ? `Back to vehicle ${vehiclesMap.get(previousView.vehicleId)?.routeShortName ?? ''}`.trim() : 'Back to nearby departures'
     : previousView?.tab === 'routes'
@@ -237,7 +271,7 @@ const App = () => {
   }, []);
 
   const clearSheetHistory = useCallback(() => {
-    sheetHistoryRef.current = [];
+    setSheetHistory([]);
   }, []);
 
   const pushCurrentSheetView = useCallback(() => {
@@ -253,11 +287,11 @@ const App = () => {
 
     if (!entry) return;
 
-    const stack = sheetHistoryRef.current;
-    const top = stack[stack.length - 1];
-    if (!top || !isSameSheetHistoryEntry(top, entry)) {
-      stack.push(entry);
-    }
+    const next = entry;
+    setSheetHistory((stack) => {
+      const top = stack.at(-1);
+      return top && isSameSheetHistoryEntry(top, next) ? stack : [...stack, next];
+    });
   }, [activeTab, selectedVehicleId, selectedRouteId, activatedRoute, selectedStop]);
 
   const ensureTemporaryRouteSubscription = useCallback((route: Route | SubscribedRoute) => {
@@ -282,19 +316,14 @@ const App = () => {
 
   // Stable coordinates for nearby calculations — only updates when the user
   // moves more than ~150m from the last position, avoiding constant GPS jitter.
-  const stableCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
-  const STABLE_THRESHOLD_DEG = 0.0015; // ~150m
-  const stableCoords = useMemo(() => {
-    if (!userCoords) return null;
-    const prev = stableCoordsRef.current;
-    if (prev && Math.abs(userCoords.lat - prev.lat) < STABLE_THRESHOLD_DEG
-            && Math.abs(userCoords.lng - prev.lng) < STABLE_THRESHOLD_DEG) {
-      return prev; // same reference — no query key change
-    }
-    const next = { lat: userCoords.lat, lng: userCoords.lng };
-    stableCoordsRef.current = next;
-    return next;
-  }, [userCoords]);
+  // Adjusted during render (https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes).
+  const [lastStableCoords, setLastStableCoords] = useState<{ lat: number; lng: number } | null>(null);
+  if (userCoords && !(lastStableCoords
+      && Math.abs(userCoords.lat - lastStableCoords.lat) < STABLE_THRESHOLD_DEG
+      && Math.abs(userCoords.lng - lastStableCoords.lng) < STABLE_THRESHOLD_DEG)) {
+    setLastStableCoords(userCoords);
+  }
+  const stableCoords = userCoords ? lastStableCoords : null;
 
   const { data: allStops, isLoading: stopsLoading } = useStops();
 
@@ -601,8 +630,9 @@ const App = () => {
   }, [cleanupTempSubscriptions, ensureTemporaryRouteSubscription, showSheetTab]);
 
   const restorePreviousSheetView = useCallback(() => {
-    const previous = sheetHistoryRef.current.pop();
+    const previous = sheetHistory.at(-1);
     if (!previous) return false;
+    setSheetHistory((stack) => stack.slice(0, -1));
 
     if (previous.tab === 'stops') {
       selectStop(previous.stop);
@@ -644,7 +674,7 @@ const App = () => {
     setSelectedVehicleId(previous.vehicleId);
     showSheetTab('vehicles');
     return true;
-  }, [cleanupTempSubscriptions, ensureTemporaryRouteSubscription, restoreSelectedStopContext, selectStop, clearSelectedStop, showSheetTab]);
+  }, [sheetHistory, cleanupTempSubscriptions, ensureTemporaryRouteSubscription, restoreSelectedStopContext, selectStop, clearSelectedStop, showSheetTab]);
 
   // Navigate back to the selected stop from a vehicle or route detail subview.
   const handleBackToStop = useCallback(() => {
@@ -832,33 +862,10 @@ const App = () => {
   }, [subscribedRoutes, selectedVehicleRouteId, selectedRouteId, selectedStopRouteIds, nearbyRouteIds]);
   const { data: patterns } = useRoutePatterns(routeIds);
 
-  const selectedRoute = useMemo((): Route | SubscribedRoute | null => {
-    if (!selectedRouteId) return null;
-
-    const subscribed = subscribedRoutes.find((route) => route.gtfsId === selectedRouteId);
-    if (subscribed) return subscribed;
-
-    for (const stop of stopsForSearch) {
-      const stopRoute = stop.routes.find((route) => route.gtfsId === selectedRouteId);
-      if (stopRoute) return { ...stopRoute };
-    }
-
-    const vehicle = vehicles.find((v) => `HSL:${v.routeId}` === selectedRouteId);
-    if (vehicle) {
-      return {
-        gtfsId: selectedRouteId,
-        shortName: vehicle.routeShortName,
-        longName: vehicle.headsign,
-        mode: vehicle.mode,
-      };
-    }
-
-    if (activatedRoute?.gtfsId === selectedRouteId) {
-      return activatedRoute;
-    }
-
-    return null;
-  }, [selectedRouteId, subscribedRoutes, stopsForSearch, vehicles, activatedRoute]);
+  const selectedRoute = useMemo(
+    () => findSelectedRoute(selectedRouteId, subscribedRoutes, stopsForSearch, vehicles, activatedRoute),
+    [selectedRouteId, subscribedRoutes, stopsForSearch, vehicles, activatedRoute],
+  );
 
   const selectedRoutePatterns = selectedRouteId ? patterns?.get(selectedRouteId) : undefined;
   const isSelectedRouteSubscribed = selectedRouteId
@@ -1001,7 +1008,7 @@ const App = () => {
         minHeight={SHEET_MIN_HEIGHT}
         maxHeight={SHEET_MAX_HEIGHT}
         initialHeight={useSettingsStore.getState().sheetHeight}
-        onHeightMotionValue={handleHeightMV}
+        onHeightMotionValue={setSheetHeightMV}
         onHeightChange={(h) => {
           setSheetHeight(h);
           setBottomPadding(h);
@@ -1205,7 +1212,7 @@ const App = () => {
                         return (
                           <div
                             key={route.gtfsId}
-                            className={`bg-gray-50 dark:bg-gray-800 rounded-xl p-2 min-[425px]:p-3 flex items-center gap-3 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors ${isActive ? 'outline outline-2 outline-primary-500' : ''}`}
+                            className={`bg-gray-50 dark:bg-gray-800 rounded-xl p-2 min-[425px]:p-3 flex items-center gap-3 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors ${isActive ? 'outline-solid outline-2 outline-primary-500' : ''}`}
                             onClick={() => handleActivateRoute(route)}
                           >
                             <div
@@ -1314,7 +1321,7 @@ const RoutesList = ({ routes, onUnsubscribe, onRouteClick, selectedRouteId, hasN
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, x: -100 }}
               transition={{ opacity: { duration: 0.15 }, scale: { duration: 0.15 } }}
-              className={`bg-gray-50 dark:bg-gray-800 rounded-xl p-2 min-[425px]:p-3 flex items-center gap-3 cursor-pointer transition-colors hover:bg-gray-100 dark:hover:bg-gray-700 ${isSelected ? 'outline outline-2 outline-primary-500' : ''}`}
+              className={`bg-gray-50 dark:bg-gray-800 rounded-xl p-2 min-[425px]:p-3 flex items-center gap-3 cursor-pointer transition-colors hover:bg-gray-100 dark:hover:bg-gray-700 ${isSelected ? 'outline-solid outline-2 outline-primary-500' : ''}`}
               onClick={() => onRouteClick?.(route)}
             >
               <div
