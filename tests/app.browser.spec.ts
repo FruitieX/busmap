@@ -50,7 +50,8 @@ test('details stay compact and navigable at 320px', async ({ page, app }, testIn
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
-test('location denial keeps the vehicle list usable without misleading nearby results', async ({ page }) => {
+test('location denial keeps the vehicle list usable without misleading nearby results', async ({ page, app }) => {
+  app.expectConsoleErrors(/Location permission denied/);
   await page.addInitScript(() => {
     const deny = (_success: PositionCallback, failure?: PositionErrorCallback | null) => {
       queueMicrotask(() => failure?.({ code: 1, message: 'Denied', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 }));
@@ -149,12 +150,13 @@ test('failed timetable refresh retains cached departures and shows a warning', a
   await page.getByRole('button', { name: 'Show Otaniemi on map' }).click();
   await expect(page.getByText('In 2 min', { exact: true })).toBeVisible();
   app.failTimetable();
+  app.expectConsoleErrors(/status of 503/);
   await page.clock.fastForward(95_000);
   await expect(page.getByRole('status').filter({ hasText: 'Updates unavailable' })).toBeVisible();
   await expect(page.getByRole('button').filter({ hasText: 'Vehicle not tracking yet' }).first()).toBeVisible();
 });
 
-test('installed PWA reloads its app shell offline', async ({ page, context }) => {
+test('installed PWA reloads its app shell offline', async ({ page, context, app }) => {
   await page.goto('/');
   await page.evaluate(async () => {
     await navigator.serviceWorker.ready;
@@ -163,6 +165,8 @@ test('installed PWA reloads its app shell offline', async ({ page, context }) =>
   await page.reload();
   await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
   await context.setOffline(true);
+  // Uncached map tiles and styles cannot load offline.
+  app.expectConsoleErrors(/net::ERR_FAILED|ERR_INTERNET_DISCONNECTED/, /AJAXError: Failed to fetch/);
   await page.reload();
   await expect(page.getByRole('button', { name: /Change sheet size/ })).toBeVisible();
   await expect(page.locator('.maplibregl-map canvas')).toBeVisible();

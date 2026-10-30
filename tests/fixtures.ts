@@ -135,7 +135,9 @@ export async function mockServices(page: Page) {
   };
 }
 
-export const test = base.extend<{ app: Awaited<ReturnType<typeof mockServices>> }>({
+type App = Awaited<ReturnType<typeof mockServices>> & { expectConsoleErrors: (...patterns: RegExp[]) => void };
+
+export const test = base.extend<{ app: App }>({
   app: [async ({ page, context }, use) => {
     await context.grantPermissions(['geolocation']);
     await context.setGeolocation({ latitude: 60.175, longitude: 24.945 });
@@ -151,14 +153,21 @@ export const test = base.extend<{ app: Awaited<ReturnType<typeof mockServices>> 
     }, route);
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
+    // Tests that simulate failures declare the console errors they expect.
+    const expectedConsoleErrors: RegExp[] = [];
+    page.on('console', (message) => {
+      if (message.type() !== 'error') return;
+      const text = message.text();
+      if (!expectedConsoleErrors.some((pattern) => pattern.test(text))) errors.push(`console.error: ${text}`);
+    });
     page.on('response', (response) => {
       if (response.url().startsWith('http://127.0.0.1:4173/') && response.status() >= 400) {
         errors.push(`${response.status()} ${response.url()}`);
       }
     });
     const app = await mockServices(page);
-    await use(app);
-    expect(errors, 'No uncaught browser errors or broken production assets').toEqual([]);
+    await use({ ...app, expectConsoleErrors: (...patterns: RegExp[]) => { expectedConsoleErrors.push(...patterns); } });
+    expect(errors, 'No uncaught browser errors, console errors or broken production assets').toEqual([]);
     expect(app.unexpectedRequests, 'All external services must be mocked').toEqual([]);
   }, { auto: true }],
 });
