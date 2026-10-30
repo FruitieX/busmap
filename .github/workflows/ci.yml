@@ -96,8 +96,8 @@ jobs:
       - name: Smoke test image
         run: |
           docker run -d --rm -p 8080:8080 --name busmap busmap:ci
-          for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:8080/ -o index.html && break; sleep 1; done
-          grep -q '<title>busmap</title>' index.html
+          for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:8080/ -o "$RUNNER_TEMP/index.html" && break; sleep 1; done
+          grep -q '<title>busmap</title>' "$RUNNER_TEMP/index.html"
           curl -fsS http://127.0.0.1:8080/app-version.json
           curl -fsS -o /dev/null http://127.0.0.1:8080/sw.js
           docker stop busmap
