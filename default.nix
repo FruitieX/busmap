@@ -3,7 +3,7 @@ stdenv.mkDerivation {
   name = "env";
   buildInputs = [
     bashInteractive
-    nodejs_22
+    nodejs_26
     yarn
   ];
 
