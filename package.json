@@ -22,7 +22,7 @@
   "dependencies": {
     "@tanstack/react-query": "5.107.1",
     "maplibre-gl": "6.16.0",
-    "motion": "14.9.1",
+    "motion": "14.10.1",
     "mqtt": "5.16.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
