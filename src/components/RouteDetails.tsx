@@ -5,6 +5,7 @@ import { useSettingsStore } from '@/stores';
 import { resolveRouteColor } from '@/lib';
 import { DELAY_EARLY_THRESHOLD, DELAY_LATE_THRESHOLD, EARTH_RADIUS_M, KM_IN_METERS, MPS_TO_KMPH } from '@/constants';
 import { StarIcon } from './StarToggleButton';
+import { stripRouteIdPrefix } from '@/lib/routeId';
 
 interface RouteDetailsProps {
   route: SubscribedRoute | Route;
@@ -78,7 +79,7 @@ export const RouteDetails = ({
   });
   const routeLength = patterns && patterns.length > 0 ? calculateRouteLength(patterns) : 0;
   const routeVehicles = vehicles.filter(
-    (vehicle) => vehicle.routeId.replace(/^HSL:/, '') === route.gtfsId.replace(/^HSL:/, ''),
+    (vehicle) => stripRouteIdPrefix(vehicle.routeId) === stripRouteIdPrefix(route.gtfsId),
   ).sort((a, b) => {
     if (a.direction !== b.direction) return a.direction - b.direction;
     return a.vehicleNumber - b.vehicleNumber;

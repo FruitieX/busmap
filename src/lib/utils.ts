@@ -1,6 +1,7 @@
 import { EARTH_RADIUS_M } from '@/constants';
 import { TRANSPORT_COLORS } from '@/types';
 import type { RouteColorMode, TransportMode } from '@/types';
+import { stripRouteIdPrefix } from '@/lib/routeId';
 
 /** Haversine distance between two lat/lng points in meters */
 export const haversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -41,7 +42,7 @@ const UNIQUE_ROUTE_COLORS = [
   '#EF476F', '#06D6A0', '#118AB2', '#F94144', '#F3722C', '#F8961E', '#43AA8B', '#577590',
 ];
 
-const normalizeRouteKey = (routeId: string) => routeId.startsWith('HSL:') ? routeId.slice(4) : routeId;
+const normalizeRouteKey = stripRouteIdPrefix;
 
 const hashString = (value: string): number => {
   let hash = 2166136261;

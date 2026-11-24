@@ -20,8 +20,17 @@ Real-time public transport vehicle tracker. Track buses, trams, metros, trains, 
 
 ### Prerequisites
 
-1. Register for a Digitransit API key at https://portal-api.digitransit.fi/
-2. Node.js 18+ installed
+1. Node.js 18+ installed
+2. A transit API key (depends on provider — see "Transit providers" below)
+
+### Transit providers
+
+busmap supports multiple transit backends through a pluggable provider system. Select the provider with `VITE_TRANSIT_PROVIDER` in `.env`:
+
+- **`hsl`** (default) — Helsinki (HSL). Requires a Digitransit API key (`VITE_DIGITRANSIT_API_KEY`) for routes/stops. Live vehicle positions come from HSL's MQTT HFP feed (no auth).
+- **`vietnam`** — A configurable Vietnam transit backend. Point it at your own REST API via `VITE_VIETNAM_API_BASE`, optional `VITE_VIETNAM_API_KEY`, and MQTT broker via `VITE_VIETNAM_MQTT_BROKER`.
+
+See `.env.example` for all available environment variables.
 
 ### Development
 
@@ -29,9 +38,9 @@ Real-time public transport vehicle tracker. Track buses, trams, metros, trains, 
 # Install dependencies
 npm install
 
-# Create .env file with your API key
+# Create .env file
 cp .env.example .env
-# Edit .env and add your VITE_DIGITRANSIT_API_KEY
+# Edit .env and add your API key / provider settings
 
 # Start development server
 npm run dev
@@ -53,14 +62,34 @@ npm run preview
 - **State:** Zustand
 - **Data fetching:** TanStack React Query
 - **Animations:** Framer Motion
-- **Real-time:** MQTT.js (HSL HFP feed)
-- **API:** Digitransit GraphQL API
+- **Real-time:** MQTT.js (configurable per provider)
+- **API:** Digitransit GraphQL API (HSL) or configurable REST (Vietnam)
 - **PWA:** Workbox via vite-plugin-pwa
+
+## Transit providers
+
+### HSL (Helsinki) — default
+
+- Routes/stops: Digitransit GraphQL API (`https://api.digitransit.fi/routing/v2/hsl/gtfs/v1`)
+- Live vehicles: HSL MQTT HFP feed (`wss://mqtt.hsl.fi:443/`)
+- Route IDs use the `HSL:` prefix (e.g. `HSL:2551`)
+- Requires `VITE_DIGITRANSIT_API_KEY` (register at https://portal-api.digitransit.fi/)
+
+### Vietnam
+
+- Routes/stops: configurable REST base (`VITE_VIETNAM_API_BASE`)
+- Live vehicles: configurable MQTT broker (`VITE_VIETNAM_MQTT_BROKER`)
+- Route ID prefix: `VITE_VIETNAM_ROUTE_ID_PREFIX` (default `VN:`)
+- Timezone: `VITE_VIETNAM_TIMEZONE` (default `Asia/Ho_Chi_Minh`)
+- Set `VITE_TRANSIT_PROVIDER=vietnam` to activate
+
+Add new providers by implementing the `TransitProvider` interface in `src/lib/providers/` and registering it in `src/lib/providers/index.ts`.
 
 ## API Notes
 
-- **MQTT feed (mqtt.hsl.fi):** Free, no authentication required. Provides real-time vehicle positions.
-- **Digitransit Routing API:** Requires registration and API key. Used for route list and polylines.
+- **HSL MQTT feed (mqtt.hsl.fi):** Free, no authentication required. Provides real-time vehicle positions (default HSL provider).
+- **Digitransit Routing API:** Requires registration and API key. Used for route list and polylines (default HSL provider).
+- **Vietnam provider:** Route/stops and MQTT broker are configured via `VITE_VIETNAM_*` env vars; no default credentials.
 
 ## License
 

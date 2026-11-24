@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware';
 import type { SubscribedRoute, Route, TransportMode, BoundingBox } from '@/types';
 import { TRANSPORT_COLORS } from '@/types';
 import { fetchRoutesByIds } from '@/lib/api';
+import { stripRouteIdPrefix } from '@/lib/routeId';
 
 /**
  * Migrate from the legacy busmap localStorage format (pre-maplibre rewrite).
@@ -75,8 +76,7 @@ interface SubscriptionState {
 }
 
 const inferMode = (gtfsId: string): TransportMode => {
-  // HSL route IDs start with HSL: prefix
-  const id = gtfsId.replace('HSL:', '');
+  const id = stripRouteIdPrefix(gtfsId);
 
   // First digit indicates mode:
   // 1xxx = bus, 2xxx = tram, 3xxx = train, 4xxx = metro, 5xxx = ferry (roughly)

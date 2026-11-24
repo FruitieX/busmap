@@ -6,6 +6,7 @@ import { extrapolate, interpolateVehicle, pruneInterpolationStates } from '@/lib
 import { getVehicleTerminusLabel, resolveRouteColor } from '@/lib';
 import type { TrackedVehicle, RoutePattern, Route, Stop } from '@/types';
 import { TRANSPORT_COLORS } from '@/types';
+import { prefixRouteId } from '@/lib/routeId';
 import type { FeatureCollection, LineString, Polygon, Point, Feature } from 'geojson';
 import { TOP_BAR_HEIGHT, getVehicleTiming, getMarkerSizeScale } from '@/constants';
 
@@ -509,13 +510,13 @@ const BusMapComponent = ({ patterns, onVehicleClick, nearbyRadius, selectedVehic
             isDimmed = true;
           }
         } else if (currentSelectedRouteId) {
-          const vehicleRouteId = `HSL:${vehicle.routeId}`;
+          const vehicleRouteId = prefixRouteId(vehicle.routeId);
           if (vehicleRouteId !== currentSelectedRouteId) {
             routeFadeFactor = 0.1; // Fade non-selected route vehicles
             isDimmed = true;
           }
         } else if (currentStopRouteIds.size > 0) {
-          const vehicleRouteId = `HSL:${vehicle.routeId}`;
+          const vehicleRouteId = prefixRouteId(vehicle.routeId);
           if (!currentStopRouteIds.has(vehicleRouteId)) {
             routeFadeFactor = 0.1; // Fade vehicles not on stop's routes
             isDimmed = true;
@@ -547,10 +548,10 @@ const BusMapComponent = ({ patterns, onVehicleClick, nearbyRadius, selectedVehic
         }
 
         // Determine color
-        const isSubscribed = subscribedRouteIds.has(`HSL:${vehicle.routeId}`) || subscribedRouteIds.has(vehicle.routeShortName);
+        const isSubscribed = subscribedRouteIds.has(prefixRouteId(vehicle.routeId)) || subscribedRouteIds.has(vehicle.routeShortName);
         const isSelected = vehicle.vehicleId === currentSelectedId;
         const color = resolveRouteColor({
-          routeId: `HSL:${vehicle.routeId}`,
+          routeId: prefixRouteId(vehicle.routeId),
           mode: vehicle.mode,
           colorMode: routeColorMode,
           isSubscribed,
@@ -864,7 +865,7 @@ const BusMapComponent = ({ patterns, onVehicleClick, nearbyRadius, selectedVehic
     [handleVehicleClick, handleDimmedFeatureClick]
   );
 
-  const selectedVehicleRouteGtfsId = selectedVehicle ? `HSL:${selectedVehicle.routeId}` : null;
+  const selectedVehicleRouteGtfsId = selectedVehicle ? prefixRouteId(selectedVehicle.routeId) : null;
   const selectedVehicleRouteMode = selectedVehicle?.mode;
   // Convert MQTT direction (1/2) to GTFS direction (0/1)
   const selectedVehicleGtfsDir = selectedVehicle ? selectedVehicle.direction - 1 : null;

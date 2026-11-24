@@ -17,6 +17,7 @@ import {
 } from './api';
 import type { StopTimetableResult } from './api';
 import type { Route, RoutePattern, Stop, TrackedVehicle, VehicleTrip } from '@/types';
+import { prefixRouteId } from '@/lib/routeId';
 
 const ROUTES_QUERY_KEY = ['routes', 'normalized'] as const;
 const STOPS_QUERY_KEY = ['stops', 'normalized'] as const;
@@ -89,7 +90,7 @@ export const useStopTimetable = (stopId: string | null) => {
 };
 
 export const useVehicleTrip = (vehicle: TrackedVehicle | null) => {
-  const routeId = vehicle ? `HSL:${vehicle.routeId}` : null;
+  const routeId = vehicle ? prefixRouteId(vehicle.routeId) : null;
 
   return useQuery<VehicleTrip | null, Error>({
     queryKey: ['vehicleTrip', routeId, vehicle?.direction, vehicle?.operatingDay, vehicle?.startTime],

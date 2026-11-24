@@ -6,6 +6,7 @@ import { TRANSPORT_COLORS } from '@/types';
 import { useStopStore, useSubscribedStopStore, useVehicleStore } from '@/stores';
 import { useNow, useStopTimetable, getStopTermini, computeAllDepartureCountdowns } from '@/lib';
 import { StarIcon } from './StarToggleButton';
+import { getProvider } from '@/lib/provider';
 
 interface StopDetailsProps {
   stop: Stop;
@@ -18,7 +19,7 @@ interface StopDetailsProps {
 
 const formatDepartureTime = (serviceDay: number, departure: number): string => {
   const date = new Date((serviceDay + departure) * 1000);
-  return date.toLocaleTimeString('fi-FI', { timeZone: 'Europe/Helsinki', hour: '2-digit', minute: '2-digit' });
+  return date.toLocaleTimeString('fi-FI', { timeZone: getProvider().timezone, hour: '2-digit', minute: '2-digit' });
 };
 
 const getMinutesUntil = (serviceDay: number, departure: number, now: number): number => {

@@ -27,6 +27,7 @@ import {
 } from '@/stores';
 import { findMatchingVehicle, haversineDistance, mqttService, resolveRouteColor, useRoutePatterns, useStops } from '@/lib';
 import type { Route, TrackedVehicle, BoundingBox, SubscribedRoute, Stop, StopDeparture } from '@/types';
+import { prefixRouteId, stripRouteIdPrefix } from '@/lib/routeId';
 import {
   SHEET_MIN_HEIGHT,
   SHEET_MAX_HEIGHT,
@@ -141,7 +142,7 @@ const findSelectedRoute = (
     if (stopRoute) return { ...stopRoute };
   }
 
-  const vehicle = vehicles.find((v) => `HSL:${v.routeId}` === selectedRouteId);
+  const vehicle = vehicles.find((v) => prefixRouteId(v.routeId) === selectedRouteId);
   if (vehicle) {
     return {
       gtfsId: selectedRouteId,
@@ -241,7 +242,7 @@ const App = () => {
   const previousViewLabel = previousView?.tab === 'vehicles'
     ? previousView.vehicleId ? `Back to vehicle ${vehiclesMap.get(previousView.vehicleId)?.routeShortName ?? ''}`.trim() : 'Back to nearby departures'
     : previousView?.tab === 'routes'
-      ? `Back to route ${previousView.route?.shortName ?? previousView.routeId.replace('HSL:', '')}`
+      ? `Back to route ${previousView.route?.shortName ?? stripRouteIdPrefix(previousView.routeId)}`
       : previousView?.tab === 'stops' ? `Back to ${previousView.stop.name}` : null;
   const { subscribeToRoute, unsubscribeFromRoute } = useSubscriptionStore();
   const flyToUserLocation = useLocationStore((state) => state.flyToUserLocation);
@@ -523,7 +524,7 @@ const App = () => {
   const handleSubscribeFromVehicle = useCallback(
     (vehicle: TrackedVehicle) => {
       const route: Route = {
-        gtfsId: `HSL:${vehicle.routeId}`,
+        gtfsId: prefixRouteId(vehicle.routeId),
         shortName: vehicle.routeShortName,
         longName: vehicle.headsign,
         mode: vehicle.mode,
@@ -666,7 +667,7 @@ const App = () => {
     const vehicle = previous.vehicleId ? useVehicleStore.getState().vehicles.get(previous.vehicleId) : undefined;
     if (vehicle) {
       ensureTemporaryRouteSubscription({
-        gtfsId: `HSL:${vehicle.routeId}`, shortName: vehicle.routeShortName,
+        gtfsId: prefixRouteId(vehicle.routeId), shortName: vehicle.routeShortName,
         longName: vehicle.headsign, mode: vehicle.mode,
       });
       useLocationStore.getState().flyToLocation(vehicle.lat, vehicle.lng, VEHICLE_FLY_TO_ZOOM);
@@ -851,7 +852,7 @@ const App = () => {
 
   const routeIds = useMemo(() => {
     const ids = new Set(subscribedRoutes.map((r) => r.gtfsId));
-    if (selectedVehicleRouteId) ids.add(`HSL:${selectedVehicleRouteId}`);
+    if (selectedVehicleRouteId) ids.add(prefixRouteId(selectedVehicleRouteId));
     // Include selected route if not already subscribed
     if (selectedRouteId) ids.add(selectedRouteId);
     // Include stop routes if a stop is selected
@@ -931,7 +932,7 @@ const App = () => {
 
   const handleSelectedVehicleUnsubscribe = useCallback(() => {
     if (selectedVehicle) {
-      handleUnsubscribe(`HSL:${selectedVehicle.routeId}`);
+      handleUnsubscribe(prefixRouteId(selectedVehicle.routeId));
     }
   }, [selectedVehicle, handleUnsubscribe]);
 

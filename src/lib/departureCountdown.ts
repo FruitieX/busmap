@@ -1,5 +1,7 @@
 import type { TrackedVehicle, StopDeparture } from '@/types';
 import { haversineDistance } from '@/lib/utils';
+import { stripRouteIdPrefix } from '@/lib/routeId';
+import { getProvider } from '@/lib/provider';
 
 /** Maximum ETA we'll show (minutes). Beyond this, we don't have enough data. */
 const MAX_ETA_MINUTES = 30;
@@ -34,8 +36,8 @@ export function findMatchingVehicle(
   _stopLon: number,
 ): boolean {
   // Extract route IDs for comparison
-  const vehicleRouteId = vehicle.routeId.replace('HSL:', '');
-  const departureRouteId = departure.routeGtfsId.replace('HSL:', '');
+  const vehicleRouteId = stripRouteIdPrefix(vehicle.routeId);
+  const departureRouteId = stripRouteIdPrefix(departure.routeGtfsId);
 
   // Route must match
   if (vehicleRouteId !== departureRouteId) return false;
@@ -55,7 +57,7 @@ export function findMatchingVehicle(
 
   // Noon belongs to the service date even on daylight-saving transitions.
   const serviceDate = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Europe/Helsinki', year: 'numeric', month: '2-digit', day: '2-digit',
+    timeZone: getProvider().timezone, year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date((departure.serviceDay + 12 * 3600) * 1000));
   return startTimeMatch && vehicle.operatingDay === serviceDate;
 }
