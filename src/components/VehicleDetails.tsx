@@ -6,6 +6,8 @@ import { useLocationStore, useSettingsStore, useSubscriptionStore } from '@/stor
 import { haversineDistance, resolveRouteColor, useNow, useVehicleTrip } from '@/lib';
 import { DELAY_EARLY_THRESHOLD, DELAY_LATE_THRESHOLD, MPS_TO_KMPH, getVehicleTiming } from '@/constants';
 import { StarIcon } from './StarToggleButton';
+import { prefixRouteId, stripRouteIdPrefix } from '@/lib/routeId';
+import { getProvider } from '@/lib/provider';
 
 interface VehicleDetailsProps {
   vehicle: TrackedVehicle;
@@ -41,12 +43,12 @@ const formatLastUpdate = (lastUpdate: number, now: number): string => {
 };
 
 const normalizeStopId = (stopId: unknown): string =>
-  typeof stopId === 'string' || typeof stopId === 'number' ? String(stopId).replace(/^HSL:/, '') : '';
+  typeof stopId === 'string' || typeof stopId === 'number' ? stripRouteIdPrefix(String(stopId)) : '';
 
 const formatTripTime = (seconds: number | null): string => {
   if (seconds === null) return '-';
   return new Intl.DateTimeFormat('fi-FI', {
-    timeZone: 'Europe/Helsinki', hour: '2-digit', minute: '2-digit',
+    timeZone: getProvider().timezone, hour: '2-digit', minute: '2-digit',
   }).format(new Date(seconds * 1000)).replace('.', ':');
 };
 
@@ -99,17 +101,17 @@ export const VehicleDetails = ({
   const { data: vehicleTrip, isLoading: isTripLoading, isError: isTripError } = useVehicleTrip(vehicle);
 
   const subscribed = subscribedRoutes.find(
-    (route) => route.gtfsId === `HSL:${vehicle.routeId}` || route.shortName === vehicle.routeShortName,
+    (route) => route.gtfsId === prefixRouteId(vehicle.routeId) || route.shortName === vehicle.routeShortName,
   );
   const isSubscribed = !!subscribed;
   const route = {
-    gtfsId: `HSL:${vehicle.routeId}`,
+    gtfsId: prefixRouteId(vehicle.routeId),
     shortName: vehicle.routeShortName,
     longName: vehicle.headsign,
     mode: vehicle.mode,
   } satisfies Route;
   const color = resolveRouteColor({
-    routeId: subscribed?.gtfsId ?? `HSL:${vehicle.routeId}`,
+    routeId: subscribed?.gtfsId ?? prefixRouteId(vehicle.routeId),
     mode: vehicle.mode,
     colorMode: routeColorMode,
     isSubscribed,

@@ -2,8 +2,9 @@ import mqtt, { MqttClient, IClientOptions } from 'mqtt';
 import type { TrackedVehicle, TransportMode, BoundingBox } from '@/types';
 import { useVehicleStore } from '@/stores/vehicleStore';
 import { useSubscriptionStore } from '@/stores/subscriptionStore';
+import { getProvider } from '@/lib/provider';
+import { prefixRouteId, stripRouteIdPrefix } from '@/lib/routeId';
 
-const MQTT_BROKER = 'wss://mqtt.hsl.fi:443/';
 const MQTT_RECONNECT_PERIOD_MS = 1000;
 const MQTT_CONNECT_TIMEOUT_MS = 7000;
 const MQTT_INITIAL_CONNECT_TIMEOUT_MS = 10000;
@@ -68,6 +69,13 @@ class MqttService {
       return this.connectPromise;
     }
 
+    // No MQTT broker configured (e.g. a REST-only provider) — stay disconnected.
+    if (!getProvider().mqttBroker) {
+      this.connectPromise = null;
+      useVehicleStore.getState().setConnectionStatus('disconnected');
+      return Promise.resolve();
+    }
+
     this.connectPromise = new Promise((resolve, reject) => {
       useVehicleStore.getState().setConnectionStatus('connecting');
 
@@ -78,7 +86,7 @@ class MqttService {
         clean: true,
       };
 
-      this.client = mqtt.connect(MQTT_BROKER, options);
+      this.client = mqtt.connect(getProvider().mqttBroker, options);
 
       this.client.on('connect', () => {
         console.log('MQTT connected');
@@ -184,12 +192,13 @@ class MqttService {
   }
 
   subscribeToRoute(routeId: string) {
-    // Route ID format: HSL:2551 -> use 2551 in topic
-    const shortRouteId = routeId.replace('HSL:', '');
+    // Strip the provider prefix for use in the MQTT topic (e.g. HSL:2551 -> 2551)
+    const shortRouteId = stripRouteIdPrefix(routeId);
+    const { mqttTopicPrefix } = getProvider();
 
     // Subscribe to both directions
     // Topic format: /hfp/v2/journey/ongoing/vp/<mode>/<oper>/<veh>/<route>/<dir>/<headsign>/<start>/<stop>/<geohash_level>/<geohash>
-    const topic = `/hfp/v2/journey/ongoing/vp/+/+/+/${shortRouteId}/+/+/+/+/+/#`;
+    const topic = `${mqttTopicPrefix}/+/+/+/${shortRouteId}/+/+/+/+/+/#`;
 
     if (!this.subscriptions.has(topic)) {
       this.subscriptions.add(topic);
@@ -204,8 +213,9 @@ class MqttService {
   }
 
   unsubscribeFromRoute(routeId: string) {
-    const shortRouteId = routeId.replace('HSL:', '');
-    const topic = `/hfp/v2/journey/ongoing/vp/+/+/+/${shortRouteId}/+/+/+/+/+/#`;
+    const shortRouteId = stripRouteIdPrefix(routeId);
+    const { mqttTopicPrefix } = getProvider();
+    const topic = `${mqttTopicPrefix}/+/+/+/${shortRouteId}/+/+/+/+/+/#`;
 
     if (this.subscriptions.has(topic)) {
       this.subscriptions.delete(topic);
@@ -241,7 +251,8 @@ class MqttService {
         // Topic format: /hfp/v2/journey/ongoing/vp/<mode>/<oper>/<veh>/<route>/<dir>/<headsign>/<start>/<stop>/<geohash_level>/<geohash>
         for (let latF = latFrac1Min; latF <= latFrac1Max; latF++) {
           for (let lonF = lonFrac1Min; lonF <= lonFrac1Max; lonF++) {
-            const topic = `/hfp/v2/journey/ongoing/vp/+/+/+/+/+/+/+/+/+/${latInt};${lonInt}/${latF}${lonF}/#`;
+            const { mqttTopicPrefix } = getProvider();
+            const topic = `${mqttTopicPrefix}/+/+/+/+/+/+/+/+/+/${latInt};${lonInt}/${latF}${lonF}/#`;
             topics.push(topic);
           }
         }
@@ -397,12 +408,12 @@ class MqttService {
       // Check if this is a subscribed route
       const subscribedRoutes = useSubscriptionStore.getState().subscribedRoutes;
       const isSubscribed = subscribedRoutes.some(
-        (r) => r.gtfsId === `HSL:${vp.route}` || r.shortName === vp.desi
+        (r) => r.gtfsId === prefixRouteId(vp.route) || r.shortName === vp.desi
       );
 
       // For non-subscribed vehicles: check if route is actively selected, otherwise apply nearby filter
       if (!isSubscribed) {
-        const isActiveRoute = this.activeRouteIds.has(`HSL:${vp.route}`);
+        const isActiveRoute = this.activeRouteIds.has(prefixRouteId(vp.route));
 
         if (!isActiveRoute) {
           // If nearby mode is off, skip non-active non-subscribed vehicles

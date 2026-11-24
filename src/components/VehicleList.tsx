@@ -3,6 +3,7 @@ import type { TrackedVehicle } from '@/types';
 import { useVehicleStore, useSubscriptionStore, useLocationStore, useSettingsStore } from '@/stores';
 import { StarToggleButton } from './StarToggleButton';
 import { resolveRouteColor } from '@/lib';
+import { prefixRouteId } from '@/lib/routeId';
 import {
   EARTH_RADIUS_M,
   MPS_TO_KMPH,
@@ -70,10 +71,10 @@ const VehicleCard = memo(
     const subscribedRoutes = useSubscriptionStore((state) => state.subscribedRoutes);
     const routeColorMode = useSettingsStore((state) => state.routeColorMode);
     const subscribed = subscribedRoutes.find(
-      (r) => r.gtfsId === `HSL:${vehicle.routeId}` || r.shortName === vehicle.routeShortName
+      (r) => r.gtfsId === prefixRouteId(vehicle.routeId) || r.shortName === vehicle.routeShortName
     );
     const color = resolveRouteColor({
-      routeId: subscribed?.gtfsId ?? `HSL:${vehicle.routeId}`,
+      routeId: subscribed?.gtfsId ?? prefixRouteId(vehicle.routeId),
       mode: vehicle.mode,
       colorMode: routeColorMode,
       isSubscribed,
@@ -158,7 +159,7 @@ const VehicleListComponent = ({ selectedVehicleId, onVehicleClick, onSubscribe, 
       distance: userLocation
         ? calculateDistance(userLocation.latitude, userLocation.longitude, v.lat, v.lng)
         : undefined,
-      isSubscribed: subscribedRouteIds.has(`HSL:${v.routeId}`) || subscribedRouteIds.has(v.routeShortName),
+      isSubscribed: subscribedRouteIds.has(prefixRouteId(v.routeId)) || subscribedRouteIds.has(v.routeShortName),
     }));
 
     // Show subscribed vehicles first, then sort by distance
@@ -184,7 +185,7 @@ const VehicleListComponent = ({ selectedVehicleId, onVehicleClick, onSubscribe, 
   const handleSubscriptionToggle = useCallback(
     (vehicle: TrackedVehicle, isSubscribed: boolean) => {
       if (isSubscribed) {
-        onUnsubscribe?.(`HSL:${vehicle.routeId}`);
+        onUnsubscribe?.(prefixRouteId(vehicle.routeId));
       } else {
         onSubscribe?.(vehicle);
       }
